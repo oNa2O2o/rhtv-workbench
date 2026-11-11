@@ -1,0 +1,6 @@
+{"_note":"仅为格式示例，不当参数参考：图和台词来自旧版片 floze迭代2（1年ぶりの彼），只演示字段写法。","template":"chat","bg":{"image":"$RES/library/cards/20261026-floze迭代2.jpg","focusY":0.4,"blur":0,"dim":0.15},"name":"蓮","avatar":{"image":"$RES/library/cards/20261026-floze迭代2.jpg","focusY":0.3},
+"messages":[{"t":0.6,"from":"char","text":"一年ぶりだよね","typing":0.0},
+{"t":1.6,"from":"char","type":"image","image":"$RES/library/cards/20261026-floze迭代2.jpg","w":520,"h":700,"focusY":0.35},
+{"t":2.9,"from":"char","text":"その部屋着、\nまだ着ててくれたんだ","typing":0.6},
+{"t":4.3,"from":"char","text":"帰るわけないじゃん","typing":0.6},
+{"t":6.2,"from":"char","text":"","typing":1.4}],"tail":0.4,"duration":6.0}

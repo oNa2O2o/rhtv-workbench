@@ -1,0 +1,187 @@
+{
+ "fps": 30,
+ "duration": 17.3,
+ "fonts": {
+  "regular": "assets/fonts/NotoSansJP-Regular.otf",
+  "medium": "assets/fonts/NotoSansJP-Medium.otf",
+  "bold": "assets/fonts/NotoSansJP-Bold.otf",
+  "black": "assets/fonts/NotoSansJP-Black.otf"
+ },
+ "logoIcon": "assets/logo_icon.png",
+ "logoWord": "assets/logo_word.png",
+ "badges": "assets/badges.png",
+ "cards": [
+  "assets/c01.jpg",
+  "assets/c02.jpg",
+  "assets/c03.jpg",
+  "assets/c04.jpg",
+  "assets/c05.jpg",
+  "assets/c06.jpg",
+  "assets/c07.jpg",
+  "assets/c08.jpg",
+  "assets/c09.jpg",
+  "assets/c10.jpg",
+  "assets/c11.jpg",
+  "assets/c12.jpg",
+  "assets/c13.jpg",
+  "assets/c14.jpg",
+  "assets/c15.jpg",
+  "assets/c16.jpg",
+  "assets/c17.jpg",
+  "assets/c18.jpg",
+  "assets/c19.jpg",
+  "assets/c20.jpg",
+  "assets/c21.jpg",
+  "assets/c22.jpg",
+  "assets/c23.jpg",
+  "assets/c24.jpg",
+  "assets/c25.jpg",
+  "assets/c26.jpg",
+  "assets/c27.jpg"
+ ],
+ "heroes": [
+  {
+   "card": 9,
+   "tag": "照れ屋",
+   "chat": "え…わ、私でいいの？",
+   "tint": "#F6A3E0",
+   "angle": "high"
+  },
+  {
+   "card": 7,
+   "tag": "クール",
+   "chat": "…別に。待ってないけど",
+   "tint": "#6FC8FF",
+   "angle": "low"
+  },
+  {
+   "card": 6,
+   "tag": "大人",
+   "chat": "ふふ、遅かったわね",
+   "tint": "#E0457B",
+   "angle": "low"
+  }
+ ],
+ "extras": [
+  11,
+  16,
+  13,
+  23,
+  12,
+  17,
+  14,
+  25,
+  15,
+  21,
+  5,
+  26,
+  10,
+  19,
+  22,
+  0,
+  24,
+  20,
+  18,
+  1
+ ],
+ "vo": [
+  {
+   "file": "001.mp3",
+   "at": 0.3,
+   "parts": [
+    [
+     0.3,
+     1.61
+    ],
+    [
+     1.88,
+     3.03
+    ]
+   ]
+  },
+  {
+   "file": "002.mp3",
+   "at": 3.25,
+   "parts": [
+    [
+     3.25,
+     4.3
+    ],
+    [
+     4.44,
+     5.41
+    ],
+    [
+     5.62,
+     6.58
+    ],
+    [
+     6.82,
+     7.37
+    ],
+    [
+     7.65,
+     8.7
+    ]
+   ]
+  },
+  {
+   "file": "003.mp3",
+   "at": 9,
+   "parts": [
+    [
+     9,
+     10.83
+    ],
+    [
+     11.18,
+     12.84
+    ]
+   ]
+  },
+  {
+   "file": "005.mp3",
+   "at": 13.45,
+   "parts": [
+    [
+     13.45,
+     14.59
+    ],
+    [
+     14.85,
+     15.77
+    ]
+   ]
+  }
+ ],
+ "copy": {
+  "l1": [
+   "あなたの選択が",
+   "[展開]を変える"
+  ],
+  "l2": [
+   "恥じらう子も",
+   "冷たい子も",
+   "大人の子も",
+   "みんな、あなたに[夢中]"
+  ],
+  "l3": [
+   "[百万以上]のキャラクターに",
+   "あなただけの[特別]を"
+  ],
+  "counter": 1000000,
+  "toggle": "無制限モード",
+  "l5": [
+   "ここから先は、",
+   "[あなた次第]"
+  ],
+  "cta": "今すぐ無料体験"
+ },
+ "mix": {
+  "duckLevel": 0.35,
+  "duckFade": 0.25,
+  "duckHold": 0.4,
+  "duckRelease": 0.7,
+  "duckMergeGap": 1.4
+ }
+}

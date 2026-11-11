@@ -1,0 +1,38 @@
+{
+ "_note": "仅为格式示例，不当参数参考。陪衬卡取自 library/cards.md 非旧版卡（女骑士、二争一、雪女）；hero 是旧版片 floze迭代2（1年ぶりの彼）的图，只演示字段写法。",
+ "template": "swipe",
+ "cards": [
+  {
+   "image": "$RES/library/cards/20261103-追放された女騎士.jpg",
+   "focusY": 0.35,
+   "name": "裏切られた女騎士",
+   "tags": ["#女騎士", "#ツンデレ", "#ファンタジー"],
+   "intro": "忠誠を誓った女騎士は、国に裏切られ、あなたの家へ逃げ込んだ。"
+  },
+  {
+   "image": "$RES/library/cards/20261028-学妹辣妹二争一-1.jpg",
+   "focusY": 0.35,
+   "name": "レイナ",
+   "tags": ["#ギャル", "#小悪魔", "#三角関係"],
+   "intro": "清楚な後輩と小悪魔ギャルが、先輩を奪い合う。誰を選ぶかは君次第♡"
+  },
+  {
+   "image": "$RES/library/cards/20261027-未亡人雪女.jpg",
+   "focusY": 0.35,
+   "name": "未亡人雪女",
+   "tags": ["#未亡人", "#雪女", "#大家さん"],
+   "intro": "家賃が払えないなんて、嘘。本当に欲しかったのは、あなた"
+  }
+ ],
+ "hero": {
+  "image": "$RES/library/cards/20261026-floze迭代2.jpg",
+  "focusY": 0.35,
+  "name": "蓮",
+  "tags": [],
+  "intro": "彼を部屋に入れたの、間違いだったかな？",
+  "gallery": [
+   "$RES/library/cards/20261026-floze迭代2.jpg",
+   "$RES/library/cards/20261026-floze迭代2.jpg"
+  ]
+ }
+}

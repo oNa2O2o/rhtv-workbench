@@ -1,14 +1,22 @@
-﻿# RHTV 视频素材工作台 · 一键安装（Windows）
-# 双击「双击安装.bat」运行。可重复运行：已装好的会跳过，坏的会修。
-# 用户只需要做两件事：填设计师名字、在浏览器里登录并点「批准」。其余全部自动完成。
+﻿# RHTV 视频素材工作台 · 安装（Windows）
+# 由 Agent 通过 bootstrap.ps1 调用（-Agent 模式：无交互、不暂停）。可重复运行：已装好的会跳过，坏的会修。
+# 用户只需要在浏览器里登录 rhTV / ElevenLabs 并点「批准」。其余全部自动完成。
+# 退出码：0 全部完成；2 有失败项；3 在等用户批准登录（提醒用户后原样再运行一次）
 param(
     [string]$Designer,
     [string]$Root,
     [switch]$SkipLogin,      # 测试用：跳过 rhTV / ElevenLabs 登录
     [switch]$ForceLink,      # 各平台已有同名 Skill 时也强制换成安装包里的版本
     [switch]$NoPause,
-    [switch]$Sandbox         # 测试用：环境变量只在本次进程生效，不写入系统
+    [switch]$Sandbox,        # 测试用：环境变量只在本次进程生效，不写入系统
+    [switch]$Agent,          # Agent 调用：不读键盘、不暂停、登录最多等 LoginWaitMin 分钟
+    [string]$WheelDir,       # Python 离线包目录（默认共享盘）
+    [int]$LoginWaitMin = 0
 )
+if ($Agent) { $NoPause = $true }
+if ($LoginWaitMin -le 0) { $LoginWaitMin = $(if ($Agent) { 8 } else { 15 }) }
+$SHAREDEP = '\\file.wemomo.com\share\创新事业部\AIGC项目视频组\Agent+RHTV自动化工作流依赖文件'
+if (-not (Test-Path $SHAREDEP) -and (Test-Path 'Z:\创新事业部\AIGC项目视频组\Agent+RHTV自动化工作流依赖文件')) { $SHAREDEP = 'Z:\创新事业部\AIGC项目视频组\Agent+RHTV自动化工作流依赖文件' }
 
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -19,7 +27,32 @@ $PKG = $PSScriptRoot
 $H = $env:USERPROFILE
 $WB = Join-Path $H '.rhtv-workbench'
 $LOGDIR = Join-Path $WB 'logs'
-$BIN = Join-Path $WB 'bin'
+
+# ---------------------------------------------------------------- 安装位置：默认容量最大的本地盘 \RHTV工作台
+function Test-Writable([string]$dir) {
+    try { New-Item -ItemType Directory -Force $dir -ErrorAction Stop | Out-Null; $f = Join-Path $dir '.wbtest'; Set-Content $f 'x' -ErrorAction Stop; Remove-Item $f; return $true } catch { return $false }
+}
+$cfgPath = Join-Path $WB 'config.json'
+$cfg = $null
+if (Test-Path $cfgPath) { try { $cfg = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
+if (-not $Root) {
+    if ($cfg -and $cfg.root -and (Test-Writable $cfg.root)) { $Root = $cfg.root }
+    else {
+        foreach ($dk in (Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction SilentlyContinue | Sort-Object Size, FreeSpace -Descending)) {
+            $cand = Join-Path ($dk.DeviceID + '\') 'RHTV工作台'
+            if (Test-Writable $cand) { $Root = $cand; break }
+        }
+        if (-not $Root) { $Root = Join-Path $H 'RHTV工作台' }
+    }
+}
+New-Item -ItemType Directory -Force $Root | Out-Null
+$SYS = Join-Path $Root '_系统'
+$BIN = Join-Path $SYS 'bin'
+
+# 设计师名字：参数 → 已有配置 → 公司域账号显示名 → 环境变量
+if (-not $Designer -and $cfg -and $cfg.designer) { $Designer = $cfg.designer }
+if (-not $Designer) { try { $Designer = [string](([adsisearcher]"(samaccountname=$env:USERNAME)").FindOne().Properties.displayname) } catch {} }
+if (-not $Designer -and $env:RHTV_DESIGNER) { $Designer = $env:RHTV_DESIGNER }
 $TS = Get-Date -Format 'yyyyMMdd-HHmmss'
 $PKGVER = [string](Get-Content (Join-Path $PKG 'VERSION.txt') -TotalCount 1 -ErrorAction SilentlyContinue)
 
@@ -27,7 +60,7 @@ $PKGVER = [string](Get-Content (Join-Path $PKG 'VERSION.txt') -TotalCount 1 -Err
 $me = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (([Security.Principal.WindowsPrincipal]$me).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) -and
     $me.Owner.Value -ne $me.User.Value) {
-    Write-Host '请不要用“以管理员身份运行”。关掉这个窗口，直接双击「双击安装.bat」。' -ForegroundColor Red
+    Write-Host '请不要在“管理员”权限的终端里安装。请在普通权限的 Agent / 终端里重新运行安装命令。' -ForegroundColor Red
     if (-not $NoPause) { Read-Host '按回车关闭' | Out-Null }
     exit 1
 }
@@ -110,13 +143,21 @@ function Run([string]$exe, [string[]]$argv, [int]$timeoutSec = 900) {
     } finally { Remove-Item $o, $e -ErrorAction SilentlyContinue }
 }
 function Quote([string]$s) { if ($s -match '[\s"]') { '"' + ($s -replace '"', '\"') + '"' } else { $s } }
+function Vendor([string]$pattern) {
+    # 先找安装包里的 vendor，再找共享盘依赖目录
+    foreach ($d in @((Join-Path $PKG 'vendor'), (Join-Path $SHAREDEP 'vendor'))) {
+        $f = Get-ChildItem $d -Filter $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($f) { return $f }
+    }
+    return $null
+}
 
 Write-Host ''
 Write-Host "=== RHTV 视频素材工作台 一键安装 $PKGVER ===" -ForegroundColor Magenta
 Write-Host "安装日志：$LOGTXT"
 Write-Host '安装期间不要点击这个窗口里的文字；需要你操作时会用青色字提示。'
 Write-Host ''
-Log '开始' 'info' "电脑 $env:COMPUTERNAME，用户 $env:USERNAME，系统 $([Environment]::OSVersion.VersionString)，安装包 $PKG"
+Log '开始' 'info' "电脑 $env:COMPUTERNAME，用户 $env:USERNAME，系统 $([Environment]::OSVersion.VersionString)，安装包 $PKG，安装位置 $Root，共享依赖 $(if (Test-Path $SHAREDEP) { $SHAREDEP } else { '连不上' })"
 Get-ChildItem $PKG -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
 
 # ---------------------------------------------------------------- 1. 脚本执行策略（rhTV 保存登录凭据要运行本地脚本）
@@ -156,7 +197,7 @@ function Find-Py {
 $PY = Find-Py
 if (-not $PY) {
     Say '没找到可用的 Python（需要 64 位 3.9–3.12），正在安装 Python 3.11（约 1–3 分钟）'
-    $inst = Get-ChildItem (Join-Path $PKG 'vendor') -Filter 'python-3*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+    $inst = Vendor 'python-3*.exe'
     if (-not $inst) {
         $dst = Join-Path $env:TEMP 'python-3.11.9-amd64.exe'
         foreach ($u in @('https://registry.npmmirror.com/-/binary/python/3.11.9/python-3.11.9-amd64.exe', 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe')) {
@@ -182,9 +223,14 @@ if ($PY) {
 
 # ---------------------------------------------------------------- 3. Python 依赖（国内镜像优先）
 function Py-Has([string]$mod) { return ((Run $PY @('-c', "`"import $mod`"") 120).code -eq 0) }
+if (-not $WheelDir) { $WheelDir = Join-Path $SHAREDEP 'wheels-cp311-win_amd64' }
 function Pip-Install([string]$pkg, [string]$mod) {
     if (Py-Has $mod) { return 'ok' }
     $last = $null
+    if (Test-Path $WheelDir) {   # 共享盘离线包（Python 3.11），几十秒装完
+        $last = Run $PY (@('-m', 'pip', 'install', '-q', '--disable-pip-version-check', '--no-index', '--find-links', (Quote $WheelDir)) + ($pkg -split ' ')) 900
+        if (Py-Has $mod) { return 'fixed' }
+    }
     $mirrors = @(@('https://pypi.tuna.tsinghua.edu.cn/simple', 'pypi.tuna.tsinghua.edu.cn'), @('https://mirrors.aliyun.com/pypi/simple', 'mirrors.aliyun.com'), @($null, $null))
     foreach ($m in $mirrors) {
         foreach ($user in @($false, $true)) {
@@ -218,8 +264,9 @@ Add-UserPath $BIN -Front
 foreach ($tool in @('ffmpeg', 'ffprobe', 'elevenlabs')) {
     $c = Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Extension -eq '.exe' } | Select-Object -First 1
     if ($c) { Log $tool 'ok' $c.Source; continue }
-    $src = Join-Path $PKG "vendor\$tool.exe"
-    if (Test-Path $src) {
+    $srcF = Vendor "$tool.exe"
+    $src = if ($srcF) { $srcF.FullName } else { $null }
+    if ($src) {
         Copy-Item $src (Join-Path $BIN "$tool.exe") -Force
         Refresh-Path
         if (Get-Command "$tool.exe" -ErrorAction SilentlyContinue) { Log $tool 'fixed' "已装到 $BIN 并加入 PATH" }
@@ -256,13 +303,13 @@ if (Test-Path $resZ) {
     if (Test-Path $resZ) { Log '共享资源盘' 'fixed' "已映射 Z: → $SHARE" }
     else { Set-UserEnv 'MM_RES' $resUNC; Log '共享资源盘' 'fixed' "Z: 被占用或映射失败，已设 MM_RES=$resUNC" }
 } else {
-    Log '共享资源盘' 'warn' "连不上 $SHARE（不在公司网络/VPN，或要先在资源管理器里打开一次并登录）。连上后重新双击安装即可"
+    Log '共享资源盘' 'warn' "连不上 $SHARE（不在公司网络/VPN，或要先在资源管理器里打开一次并登录）。连上后再运行一次安装即可"
 }
 
 # ---------------------------------------------------------------- 7. rhTV 客户端（rhtvcli）
 $RHHOME = Join-Path $H '.runninghub-canvas'
 $RHCLI = Join-Path $RHHOME 'bin\rhtvcli.cmd'
-$rhzip = Get-ChildItem (Join-Path $PKG 'vendor') -Filter 'rhtv-canvas-clients-*.zip' -ErrorAction SilentlyContinue | Select-Object -First 1
+$rhzip = Vendor 'rhtv-canvas-clients-*.zip'
 $wantVer = $null
 if ($rhzip -and $rhzip.Name -match 'clients-(\d+\.\d+\.\d+)') { $wantVer = $Matches[1] }
 function RH-Ver { if (Test-Path $RHCLI) { $r = Run $RHCLI @('--version') 60; if ($r.all -match '(\d+\.\d+\.\d+)') { return $Matches[1] } }; return $null }
@@ -276,9 +323,9 @@ if ($haveVer -and (-not $wantVer -or [version]$haveVer -ge [version]$wantVer)) {
 } else {
     Say '正在安装 rhTV 客户端（约 1–3 分钟）'
     # 先准备好 Node（离线包），避免官方脚本去 nodejs.org 下载超时
-    $nodeZip = Get-ChildItem (Join-Path $PKG 'vendor') -Filter 'node-v*-win-x64.zip' -ErrorAction SilentlyContinue | Select-Object -First 1
+    $nodeZip = Vendor 'node-v*-win-x64.zip'
     if ($nodeZip) {
-        $nodeDir = Join-Path $WB 'node'
+        $nodeDir = Join-Path $SYS 'node'
         if (-not (Test-Path (Join-Path $nodeDir 'node.exe'))) {
             $tmp = Join-Path $env:TEMP "wbnode_$TS"
             Expand-Archive -LiteralPath $nodeZip.FullName -DestinationPath $tmp -Force
@@ -321,8 +368,8 @@ function Get-SkillVer([string]$dir) {
     return [version]'0.0.0'
 }
 $SKSRC = Join-Path $PKG 'skills'
-$SKDST = Join-Path $WB 'skills'
-$BAK = Join-Path $WB "backup\$TS"
+$SKDST = Join-Path $SYS 'skills'
+$BAK = Join-Path $SYS "backup\$TS"
 $skills = @(Get-ChildItem $SKSRC -Directory -ErrorAction SilentlyContinue)
 New-Item -ItemType Directory -Force $SKDST | Out-Null
 $copyFail = @()
@@ -401,7 +448,7 @@ if (Test-Path $RHCLI) {
         $done = $false
         for ($try = 1; $try -le 3 -and -not $done; $try++) {
             Write-Host ''
-            Write-Host '>>> 浏览器会打开 rhTV 授权页：登录你的 RunningHub 账号，然后点「批准」。批准前不要关这个窗口（最多等 15 分钟）。' -ForegroundColor Cyan
+            Write-Host '>>> 浏览器会打开 rhTV 授权页：登录你的 RunningHub 账号，然后点「批准」。批准前不要关这个窗口（最多等 $LoginWaitMin 分钟）。' -ForegroundColor Cyan
             $o = Join-Path $env:TEMP ("rhlogin_{0}_{1}.txt" -f $TS, $try)
             $p = Start-Process -FilePath $RHCLI -ArgumentList '--json', 'login' -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError "$o.err"
             $null = $p.Handle
@@ -413,7 +460,7 @@ if (Test-Path $RHCLI) {
                     Write-Host "    如果浏览器没有自动打开，请手动打开：$($Matches[3])" -ForegroundColor Yellow
                     $shown = $true
                 }
-                if ((Get-Date) - $p.StartTime -gt [TimeSpan]::FromMinutes(15)) { try { $p.Kill() } catch {}; break }
+                if ((Get-Date) - $p.StartTime -gt [TimeSpan]::FromMinutes($LoginWaitMin)) { try { $p.Kill() } catch {}; $script:LOGIN_WAIT = $true; break }
             }
             $txt = (Get-Content $o, "$o.err" -Raw -Encoding UTF8 -ErrorAction SilentlyContinue) -join "`n"
             Remove-Item $o, "$o.err" -ErrorAction SilentlyContinue
@@ -429,7 +476,8 @@ if (Test-Path $RHCLI) {
                 Log 'rhTV 登录' 'info' '保存凭据的脚本被执行策略拦住，已放开后重试（需要再批准一次）'
                 continue
             }
-            Log 'rhTV 登录' 'fail' '没有完成授权（超时或拒绝）。重新双击安装即可再登录' $txt
+            if ($script:LOGIN_WAIT) { Log 'rhTV 登录' 'warn' "等待用户在浏览器批准 rhTV 授权（已等 $LoginWaitMin 分钟）。批准后再运行一次安装" $txt; $script:NEED_LOGIN = $true }
+            else { Log 'rhTV 登录' 'fail' '没有完成授权（被拒绝或出错）。再运行一次安装即可重新登录' $txt }
             break
         }
     }
@@ -447,38 +495,27 @@ if ($ELEXE) {
     elseif ($SkipLogin) { Log 'ElevenLabs 登录' 'skip' '按参数跳过登录' }
     else {
         Write-Host ''
-        Write-Host '>>> 接下来登录 ElevenLabs（口播、BGM、音效要用）：浏览器会打开授权页，登录后确认即可（最多等 15 分钟）。' -ForegroundColor Cyan
+        Write-Host '>>> 接下来登录 ElevenLabs（口播、BGM、音效要用）：浏览器会打开授权页，登录后确认即可（最多等 $LoginWaitMin 分钟）。' -ForegroundColor Cyan
         $p = Start-Process -FilePath $ELEXE -ArgumentList 'auth', 'login' -NoNewWindow -PassThru
         $null = $p.Handle
         while (-not $p.HasExited) {
             Start-Sleep -Seconds 2
-            if ((Get-Date) - $p.StartTime -gt [TimeSpan]::FromMinutes(15)) { try { $p.Kill() } catch {}; break }
+            if ((Get-Date) - $p.StartTime -gt [TimeSpan]::FromMinutes($LoginWaitMin)) { try { $p.Kill() } catch {}; $script:LOGIN_WAIT = $true; break }
         }
         if (EL-LoggedIn) { Log 'ElevenLabs 登录' 'fixed' '登录完成' }
-        else { Log 'ElevenLabs 登录' 'fail' '没登录成功，重新双击安装可再试' (Run $ELEXE @('auth', 'status') 60).all }
+        elseif ($script:LOGIN_WAIT) { Log 'ElevenLabs 登录' 'warn' '等待用户在浏览器批准 ElevenLabs 授权。批准后再运行一次安装'; $script:NEED_LOGIN = $true }
+        else { Log 'ElevenLabs 登录' 'fail' '没登录成功，再运行一次安装可再试' (Run $ELEXE @('auth', 'status') 60).all }
     }
 } else { Log 'ElevenLabs 登录' 'fail' 'ElevenLabs CLI 没装好（见上面 elevenlabs 一项）' }
 
 # ---------------------------------------------------------------- 10. 工作台配置
 $WBPY = Join-Path $H '.claude\skills\rhtv-workbench\scripts\wb.py'
 if (-not (Test-Path $WBPY)) { $WBPY = Join-Path $SKDST 'rhtv-workbench\scripts\wb.py' }
-$cfgPath = Join-Path $WB 'config.json'
-$cfg = $null
-if (Test-Path $cfgPath) { try { $cfg = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
-if (-not $Designer -and $cfg -and $cfg.designer) { $Designer = $cfg.designer }
-while (-not $Designer) {
+while (-not $Designer -and -not $Agent) {
     Write-Host ''
     $Designer = ([string](Read-Host '请输入你的名字（RHTV 里会建同名文件夹，例如 钟海明），输完按回车')).Trim()
 }
-function Test-Writable([string]$dir) {
-    try { New-Item -ItemType Directory -Force $dir -ErrorAction Stop | Out-Null; $f = Join-Path $dir '.wbtest'; Set-Content $f 'x' -ErrorAction Stop; Remove-Item $f; return $true } catch { return $false }
-}
-if (-not $Root) {
-    if ($cfg -and $cfg.root -and (Test-Writable $cfg.root)) { $Root = $cfg.root }
-    elseif ((Test-Path 'D:\') -and (Test-Writable 'D:\RHTV工作台')) { $Root = 'D:\RHTV工作台' }
-    else { $Root = Join-Path $H 'RHTV工作台' }
-}
-New-Item -ItemType Directory -Force $Root | Out-Null
+if (-not $Designer) { Log '设计师名字' 'fail' '读不到你的名字（公司域账号没有显示名）。请让 Agent 带 -Designer <你的名字> 再运行一次' }
 # mm-packager 的工作目录变量：没设且默认路径不存在时，放到本地工作目录下
 foreach ($v in @(
         @{ k = 'MM_WORK_ROOT'; def = 'F:\钟海明\2026'; sub = '工程' },
@@ -492,19 +529,19 @@ foreach ($v in @(
     Set-UserEnv $v.k $dir
     Log "目录变量 $($v.k)" 'fixed' $dir
 }
-if ($PY -and (Test-Path $WBPY) -and (Test-Path $RHCLI)) {
+if ($Designer -and $PY -and (Test-Path $WBPY) -and (Test-Path $RHCLI)) {
     $acts = RH-Account
     if ($acts -contains 'canvas:edit') {
         $r = Run $PY @('-I', (Quote $WBPY), 'setup', '--designer', (Quote $Designer), '--root', (Quote $Root)) 300
         if ($r.code -eq 0) { Log '工作台配置' 'ok' "设计师 $Designer，本地目录 $Root" }
         else { Log '工作台配置' 'fail' 'wb setup 失败' $r.all }
     } else {
-        Log '工作台配置' 'warn' "rhTV 还没登录，先记下设计师 $Designer、目录 $Root；登录后重新双击安装会自动完成"
+        Log '工作台配置' 'warn' "rhTV 还没登录，先记下设计师 $Designer、目录 $Root；用户批准登录后再运行一次安装会自动完成"
     }
     $r = Run $PY @('-I', (Quote $WBPY), 'check') 120
     if ($r.code -eq 0) { Log '工作台自检' 'ok' 'wb check 通过' $r.out } else { Log '工作台自检' 'fail' 'wb check 没通过' $r.all }
 } else {
-    $miss = @(); if (-not $PY) { $miss += 'Python' }; if (-not (Test-Path $WBPY)) { $miss += "wb.py（$WBPY）" }; if (-not (Test-Path $RHCLI)) { $miss += 'rhTV 客户端' }
+    $miss = @(); if (-not $Designer) { $miss += '设计师名字' }; if (-not $PY) { $miss += 'Python' }; if (-not (Test-Path $WBPY)) { $miss += "wb.py（$WBPY）" }; if (-not (Test-Path $RHCLI)) { $miss += 'rhTV 客户端' }
     Log '工作台配置' 'fail' ('缺 ' + ($miss -join '、') + '，见上面的失败项')
 }
 
@@ -535,9 +572,14 @@ if ($fails.Count -eq 0) {
     Write-Host "然后在任意 Agent（$($linked -join '、')）里说「新建工程 261110-JP-名称」即可开始。" -ForegroundColor Green
     if ($warns.Count) { Write-Host "有 $($warns.Count) 项注意，见上表（不影响主流程）。" -ForegroundColor Yellow }
 } else {
-    Write-Host "有 $($fails.Count) 项失败，见上表。按提示处理后重新双击安装即可（会自动跳过已完成的）。" -ForegroundColor Red
+    Write-Host "有 $($fails.Count) 项失败，见上表。按提示处理后再运行一次安装即可（会自动跳过已完成的）。" -ForegroundColor Red
 }
 Write-Host "安装报告：$report"
 Log '结束' 'info' "失败 $($fails.Count) 项，注意 $($warns.Count) 项"
+$code = if ($fails.Count) { 2 } elseif ($script:NEED_LOGIN) { 3 } else { 0 }
+$nextMsg = if ($code -eq 3) { '提醒用户在浏览器里批准授权，然后原样再运行一次安装命令' } elseif ($code -eq 2) { '按 failed 处理后原样再运行一次；处理不了就把 log 发给维护者' } else { '告诉用户重启 Agent 后说「新建工程 261110-JP-名称」' }
+$summary = [ordered]@{ code = $code; root = $Root; designer = $Designer; platforms = $linked; report = $report; log = $LOGTXT
+    failed = @($fails | ForEach-Object { "$($_.步骤)：$($_.说明)" }); warnings = @($warns | ForEach-Object { "$($_.步骤)：$($_.说明)" }); next = $nextMsg }
+Write-Host ('RESULT_JSON: ' + ($summary | ConvertTo-Json -Compress -Depth 3))
 if (-not $NoPause) { Read-Host '按回车关闭' | Out-Null }
-if ($fails.Count) { exit 2 }
+exit $code

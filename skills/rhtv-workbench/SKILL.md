@@ -1,6 +1,6 @@
 ---
 name: rhtv-workbench
-version: 0.3.0
+version: 0.4.0
 description: 视频素材自动化工作台：把每个买量视频工程的全部素材（文案、提示词、音色、3D 参考、人设图、母版、包装视频）和进度，按固定格式摆到 RHTV（RunningHub 画布）上，设计师在画布上审核；成品和全部物料收在本地文件夹。任何 Agent 加载即可用，排版、进度、花费统一走 scripts/wb.py。用户说“配置工作台”“新建工程”“继续工程/继续做”“通过/打回”“工作台进度”“重排画布”“RHTV 工作台”“把素材放到画布”或调用 /rhtv-workbench 时使用。
 ---
 
@@ -36,7 +36,7 @@ python "<本 SKILL.md 所在目录>/scripts/wb.py" <命令> ...
 
 ## 一、第一次使用：配置工作台
 
-**新电脑**：让用户双击安装包里的 `双击安装.bat`。它会自动装好 Python 及依赖、ffmpeg、ElevenLabs CLI、rhTV 客户端，映射共享盘，把全部 Skill 链接到本机所有 Agent 平台，并打开浏览器让用户登录 rhTV / ElevenLabs，最后在桌面生成安装报告。可重复运行，坏了就再双击一次。
+**新电脑**：把 https://github.com/oNa2O2o/rhtv-workbench 发给 Agent，按仓库 README 的「给 Agent：安装步骤」执行一条命令即可（公司内网优先用共享盘里的 `bootstrap.ps1`）。它会自动装好 Python 及依赖、ffmpeg、ElevenLabs CLI、rhTV 客户端，把全部 Skill 链接到本机所有 Agent 平台，默认装到容量最大的盘 `X:\RHTV工作台`，并打开浏览器让用户登录 rhTV / ElevenLabs。可重复运行：输出 `RESULT_JSON` 的 code 为 3 表示在等用户批准登录，提醒后原样再跑一次。
 已经装过、只是在 Agent 里第一次用：
 
 1. `wb check`：看 `login`。没装或没登录时，按 `references/安装与登录.md` 装好并让用户在浏览器里点一次批准（唯一需要用户动手的地方）。`pillow`/`ffprobe` 缺了只影响预览和尺寸精度，提示用户装即可。

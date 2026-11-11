@@ -16,7 +16,7 @@ CFG_DIR = os.path.join(HOME, ".rhtv-workbench")
 CFG_PATH = os.path.join(CFG_DIR, "config.json")
 LOG_DIR = os.path.join(CFG_DIR, "logs")
 RUN_LOG = os.path.join(LOG_DIR, "运行日志.jsonl")
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 CTX = {"cmd": None, "argv": [], "t0": time.time()}
 
 # ---------------------------------------------------------------- 排版常量（画布像素）

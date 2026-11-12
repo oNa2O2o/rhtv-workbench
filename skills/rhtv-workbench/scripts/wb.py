@@ -17,6 +17,7 @@ CFG_PATH = os.path.join(CFG_DIR, "config.json")
 LOG_DIR = os.path.join(CFG_DIR, "logs")
 RUN_LOG = os.path.join(LOG_DIR, "运行日志.jsonl")
 VERSION = "0.4.0"
+UPSTREAM_VERSION_URL = "https://raw.githubusercontent.com/oNa2O2o/rhtv-workbench/main/VERSION.txt"
 CTX = {"cmd": None, "argv": [], "t0": time.time()}
 
 # ---------------------------------------------------------------- 排版常量（画布像素）
@@ -26,7 +27,7 @@ LAYOUT = {
     "gap_y": 50,          # 列内上下间距
     "row_gap": 320,       # 两个工程（行）之间的距离（分组边框外）
     "media_max_h": 820,   # 图片最大高度（视频按 RHTV 原生：宽 360）
-    "text_min_h": 220, "text_max_h": 1800,
+    "text_min_h": 220, "text_max_h": 6000,
     "overview_x": -1300, "overview_w": 1000,
     "row_x": 0, "row_y0": 0,
     "staging_y": -2600,   # 生成节点的临时位置（相对本行，adopt 后会摆进行里）
@@ -206,6 +207,21 @@ def _rh_once(args, check=True, timeout=900, json_flag=True):
     return d
 
 
+def find_all(d, key):
+    """递归收集所有 key 的值（去重保序），如 results 里每个计划的 jobId。"""
+    res = []
+    if isinstance(d, dict):
+        for k, v in d.items():
+            if k == key and v not in (None, "", []):
+                res += [str(x) for x in (v if isinstance(v, list) else [v])]
+            else:
+                res += find_all(v, key)
+    elif isinstance(d, list):
+        for v in d:
+            res += find_all(v, key)
+    return list(dict.fromkeys(res))
+
+
 def err_code(d):
     e = d.get("error")
     return (e.get("code") if isinstance(e, dict) else e) or ("RC_%s" % d.get("_rc") if d.get("_rc") else None)
@@ -243,13 +259,25 @@ def cfg():
 
 
 def fmt_money(x):
+    """积分显示：整数；不足 1 的保留一位小数。"""
     x = float(x or 0)
     return str(int(round(x))) if abs(x - round(x)) < 0.05 or x >= 100 else f"{x:.1f}"
 
 
+POINTS_PER_CNY = 100   # 账单核对（2026-11-12）：报价 0.1 元的人设图实际扣 10 积分
+
+
+def quote_points(c, est):
+    """把报价记成积分。rhtvcli 报价单位还是元（CNY），平台实际按积分扣，1 元 = 100 积分。返回 (积分, 报价是否完整)。"""
+    totals = est.get("totals", [])
+    pts = sum(float(t.get("amount") or 0) * (POINTS_PER_CNY if str(t.get("currency", "CNY")).upper() == "CNY" else 1) for t in totals)
+    ok = est.get("status") == "AVAILABLE" and bool(totals) and all(t.get("coverage") == "COMPLETE" for t in totals)
+    return round(pts, 3), ok
+
+
 def canvas_name(c, period):
     flag = "+" if period.get("incomplete") else ""
-    return f'{c.get("prefix", "")}{period["key"]}-花费：{fmt_money(period.get("total", 0))}{flag}'
+    return f'{c.get("prefix", "")}{period["key"]}-{c["designer"]}-积分：{fmt_money(period.get("total", 0))}{flag}'
 
 
 def designer_dir(c):
@@ -396,12 +424,14 @@ def fit(col_w, wh, kind=None):
 
 
 def text_h(text, w):
-    cpl = max(8, int((w - 40) / 15))
-    lines = 0
+    """按偏大的字号估算（宁可留白，不截断）：正文按 16px 字、26px 行高，标题行多算半行。"""
+    cpl = max(8, int((w - 56) / 16))
+    lines = 0.0
     for para in text.split("\n"):
         width = sum(2 if ord(ch) > 0x2E80 else 1 for ch in para) / 2
-        lines += max(1, math.ceil(width / cpl))
-    return int(min(LAYOUT["text_max_h"], max(LAYOUT["text_min_h"], 70 + lines * 24)))
+        n = max(1, math.ceil(width / cpl))
+        lines += n * (1.5 if para.lstrip().startswith("#") else 1)
+    return int(min(LAYOUT["text_max_h"], max(LAYOUT["text_min_h"], 90 + lines * 26)))
 
 
 def col_width(col):
@@ -454,7 +484,8 @@ def sync_state(c, p, names=None):
             # 记下画布上的实际位置/尺寸：重排时只移动不在标准位置的节点
             v["x"], v["y"] = pos.get("x"), pos.get("y")
             v["placed"] = True
-            if v.get("kind") != "video" and sz.get("width") and v.get("kind") != "text":
+            # 文字框也记实际尺寸：网页端或手动改小后，重排会按内容改回完整显示的尺寸
+            if v.get("kind") != "video" and sz.get("width"):
                 v["_aw"], v["_ah"] = sz["width"], sz["height"]
         if st.get("group") and st["group"] not in groups:
             st["group"] = None
@@ -463,9 +494,21 @@ def sync_state(c, p, names=None):
 
 
 # ---------------------------------------------------------------- 排版
+def split_part(slot):
+    """「大纲·3」→ ("大纲", 3)：固定文字槽位可拆成多个分节点（如 5 个大纲各占一个节点）。"""
+    m = re.fullmatch(r"(.+?)·?(\d+)", slot or "")
+    if m and m.group(1) in FIXED_SLOTS and m.group(1) != "标题卡":
+        return m.group(1), int(m.group(2))
+    return slot, None
+
+
 def slot_col(slot, version=None):
     if slot in FIXED_SLOTS:
         return FIXED_SLOTS[slot]
+    base, n = split_part(slot)
+    if n:
+        col, order = FIXED_SLOTS[base]
+        return col, order + n / 100
     if slot in VERSION_SLOTS:
         return (f"版本{version}", VERSION_SLOTS.index(slot))
     fail(f"未知槽位「{slot}」", 可用=list(FIXED_SLOTS) + VERSION_SLOTS + sorted(LOCAL_ONLY))
@@ -592,9 +635,9 @@ def put_text_node(c, p, st, slot, text, version=None, review=False):
     old = st["slots"].get(k)
     if old and old.get("node") and old.get("kind") == "text":
         d = rh("node", "update", "id:" + old["node"], "-p", p["canvas_id"], "--name", name,
-               *text_args(text), "--height", h, check=False)
+               *text_args(text), "--width", w, "--height", h, check=False)
         if not d.get("_rc"):
-            old.update(h=h, name=name, review=review, rejected=False, updated=now())
+            old.update(w=w, h=h, name=name, review=review, rejected=False, updated=now())
             return old
         if err_code(d) != "ENTITY_NOT_FOUND":
             fail("更新文字节点失败", slot=k, result=d)
@@ -624,7 +667,7 @@ def title_text(st):
     if rejected:
         lines.append("打回待改：" + "、".join(rejected))
     lines += [f"版本：{len(vs)} 个" + (f"（{' / '.join(labels)}）" if labels else ""),
-              f"花费：{fmt_money(st.get('cost', 0))} 积分" + ("（含未报价项）" if st.get("incomplete") else ""),
+              f"积分：{fmt_money(st.get('cost', 0))}" + ("（含未报价项）" if st.get("incomplete") else ""),
               f"更新：{now()}"]
     if st.get("note"):
         lines += ["", "最近意见：" + st["note"]]
@@ -636,14 +679,15 @@ def refresh_title(c, p, st):
 
 
 def refresh_overview(c, p):
-    lines = [f"工程总览 · {p['key']}", f"设计师：{c['designer']}　花费合计：{fmt_money(p.get('total', 0))} 积分", ""]
+    lines = [f"工程总览 · {p['key']}", f"设计师：{c['designer']}　积分合计：{fmt_money(p.get('total', 0))}", ""]
     for name in p["rows"]:
         st = load_json(os.path.join(proj_dir(c, p, name), "工作台.json")) or {}
         lines.append(f"{name}　{st.get('stage', '')} · {st.get('state', '')}　{fmt_money(st.get('cost', 0))} 积分")
     text = "\n".join(lines)
     h = text_h(text, LAYOUT["overview_w"])
     if p.get("overview"):
-        d = rh("node", "update", "id:" + p["overview"], "-p", p["canvas_id"], *text_args(text), "--height", h, check=False)
+        d = rh("node", "update", "id:" + p["overview"], "-p", p["canvas_id"], *text_args(text),
+               "--x", LAYOUT["overview_x"], "--y", LAYOUT["row_y0"], "--width", LAYOUT["overview_w"], "--height", h, check=False)
         if not d.get("_rc"):
             return
     d = rh("node", "create", "工作台总览", "-p", p["canvas_id"], "-t", "text", *text_args(text),
@@ -843,7 +887,7 @@ def check_slot_args(a):
 
 
 def archive(st, slot, src, version=None, new_name=None):
-    dst_dir = os.path.join(st["local"], LOCAL_DIRS.get(slot, "其他"))
+    dst_dir = os.path.join(st["local"], LOCAL_DIRS.get(split_part(slot)[0], "其他"))
     os.makedirs(dst_dir, exist_ok=True)
     base = new_name or ((f"v{version}_" if version else "") + os.path.basename(src))
     dst = os.path.join(dst_dir, base)
@@ -859,6 +903,9 @@ def cmd_put(a):
     src = os.path.abspath(a.file)
     if not os.path.isfile(src):
         fail(f"文件不存在：{src}")
+    base, n = split_part(norm_key(a.slot))
+    if n:
+        a.slot = f"{base}·{n}"
     if a.slot in LOCAL_ONLY:
         dst = archive(st, a.slot, src)
         out({"ok": True, "project": a.name, "slot": a.slot, "local": dst, "canvas": False})
@@ -875,6 +922,18 @@ def cmd_put(a):
     if ext in TEXT_EXT:
         with open(src, encoding="utf-8-sig") as f:
             text = f.read().strip()
+        # 整份（大纲）和分节点（大纲·1…）互斥：放一种就删掉另一种
+        base, n = split_part(a.slot)
+        for k2 in [k2 for k2, v2 in st["slots"].items() if k2 != a.slot and
+                   (k2 == base if n else split_part(k2)[0] == a.slot and split_part(k2)[1])]:
+            v2 = st["slots"].pop(k2)
+            if v2.get("node"):
+                rh("node", "delete", "id:" + v2["node"], "-p", p["canvas_id"], check=False)
+            f2 = v2.get("file")
+            if f2 and os.path.exists(f2) and os.path.abspath(f2) != src:
+                od = os.path.join(os.path.dirname(f2), "_旧版")
+                os.makedirs(od, exist_ok=True)
+                shutil.move(f2, os.path.join(od, os.path.basename(f2)))
         put_text_node(c, p, st, a.slot, text, a.version, a.review)
     else:
         kind = MEDIA_EXT[ext]
@@ -974,6 +1033,9 @@ def cmd_adopt(a):
                       "name": name, "review": a.review, "rejected": False, "updated": now(),
                       "file": files[0] if files else None}
     st["pending_nodes"] = [n for n in st.get("pending_nodes", []) if n != nk]
+    for e in p["ledger"]:                   # 账本没记 jobId 的在这里补记（对账按 jobId）
+        if e.get("node") == nk and e.get("project") == a.name and not e.get("manual"):
+            fill_job(p, e)
     save_proj(c, p, st)
     if old and old.get("node") and old["node"] != nk:
         rh("node", "delete", "id:" + old["node"], "-p", p["canvas_id"], check=False)
@@ -1008,7 +1070,8 @@ def cmd_remove(a):
             old_dir = os.path.join(os.path.dirname(f), "_旧版")
             os.makedirs(old_dir, exist_ok=True)
             shutil.move(f, os.path.join(old_dir, os.path.basename(f)))
-    log(st, f"移除：{'、'.join(dict.fromkeys(keys))}")
+    note = read_note(a)
+    log(st, f"移除：{'、'.join(dict.fromkeys(keys))}" + (f"\n  原话：{note}" if note else ""))
     st = commit(c, p, st)
     out({"ok": True, "project": a.name, "removed": list(dict.fromkeys(keys))})
 
@@ -1117,7 +1180,7 @@ def log(st, text):
         f.write(f"- {now()} {text}\n")
 
 
-# ---------------------------------------------------------------- 命令：生成与花费
+# ---------------------------------------------------------------- 命令：生成与积分
 def cmd_gen(a):
     """在画布上建一个生成节点（提示词从文件读，避免命令行截断）。返回节点 ID，接着用 run。"""
     c = cfg()
@@ -1168,84 +1231,139 @@ def book(c, p, st, amount, entry, incomplete):
     p["ledger"].append(entry)
 
 
+def set_jobs(entry, jobs):
+    if jobs:
+        entry["jobId"] = jobs[0] if len(jobs) == 1 else jobs
+
+
+def fill_job(p, entry):
+    """账本补记 jobId：账单的 bizNo 就是它（不能拿 Canvas taskId 代替）。查不到不报错，对账时会列出来。"""
+    if entry.get("jobId") or not entry.get("task"):
+        return entry.get("jobId")
+    r = rh("results", "--task-id", entry["task"], "--limit", 50, check=False, timeout=120)
+    set_jobs(entry, find_all(r, "jobId"))
+    return entry.get("jobId")
+
+
 def cmd_run(a):
-    """在画布上跑一个节点：先报价，再运行等结果；成功才按报价记花费。不需要问用户。"""
+    """在画布上跑一个节点：先报价，再运行等结果；成功才按报价记积分。不需要问用户。
+    --no-wait：报价、记账（pending）、派发后立刻返回；多条都提交完再 wait <工程> 一次等完。"""
     c = cfg()
     p = find_proj_period(c, a.name)
     st = load_proj(c, p, a.name)
     sel = a.node if ":" in a.node else "id:" + a.node
     nk = sel.split(":", 1)[1]
     est = rh("node", "estimate", sel, "-p", p["canvas_id"], "--billing-scope", "personal", check=False)
-    # 花费一律记 RH 积分：报价是 CNY，账单实测 0.1 元 = 10 积分（G2 低价版），按 1 元 = 100 积分换算
-    amount = round(100 * sum(float(t.get("amount") or 0) for t in est.get("totals", []) if t.get("currency", "CNY") == "CNY"))
-    incomplete = est.get("status") != "AVAILABLE" or not est.get("totals") or         any(t.get("coverage") != "COMPLETE" for t in est.get("totals", []))
-    # 报价 0 / 用了免费额度 ≠ 没花钱：RH 现在按积分扣费，CLI 看不到实际扣分，一律标未核对
+    amount, ok = quote_points(c, est)
+    incomplete = not ok
+    # 报价 0 / 用了免费额度 ≠ 没花钱：RH 按积分扣费，CLI 看不到实际扣分，一律标未核对
     if amount == 0 or any(d.get("usedFreeLimit") for d in est.get("details", [])):
         incomplete = True
     if incomplete:
-        warn(f"报价不完整或为 0（{est.get('status') or err_code(est)}），先按 {amount} 积分记；实际积分扣减 CLI 看不到，"
-             f"交付前到 RH 网站积分明细核对，用 cost --add 补记。不要对用户说“花费 0”")
+        warn(f"报价不完整或为 0（{est.get('status') or err_code(est)}），先按 {fmt_money(amount)} 积分记；实际扣分 CLI 看不到，"
+             f"交付前按 references/积分对账.md 拿账单 json，用 cost --reconcile 按 jobId 填实扣。不要对用户说“花费 0”")
     rid = uuid7()
-    entry = {"time": now(), "project": a.name, "node": nk, "amount": amount, "runRequestId": rid,
-             "estimate": est.get("estimateId"), "estimate_status": est.get("status"), "status": "dispatching"}
+    entry = {"time": now(), "project": a.name, "node": nk, "amount": amount, "unit": "积分", "runRequestId": rid,
+             "estimate": est.get("estimateId"), "estimate_status": est.get("status"), "incomplete": incomplete,
+             "status": "dispatching"}
     p["ledger"].append(entry)          # 派发前先记 ID，崩了也能按原 ID 查
     save_period(c, p)
     p["ledger"].pop()
-    r = rh("node", "run", sel, "-p", p["canvas_id"], "--billing-scope", "personal", "--run-request-id", rid,
-           "--timeout", a.timeout, check=False, timeout=int(a.timeout) + 120)
+    run_args = ["node", "run", sel, "-p", p["canvas_id"], "--billing-scope", "personal", "--run-request-id", rid]
+    if a.no_wait:
+        r = rh(*run_args, "--no-wait", check=False, timeout=300)
+    else:
+        r = rh(*run_args, "--timeout", a.timeout, check=False, timeout=int(a.timeout) + 120)
     status = str(r.get("status") or r.get("taskStatus") or (r.get("_rh") or {}).get("outcome") or "").upper()
     task = first(r, "taskId")
     entry.update(task=task, run_status=status)
-    nstatus, has_out = node_done(p, nk)
-    if not r.get("_rc") and (status in OK_STATES or (nstatus == "finished" and has_out)) and status not in BAD_STATES:
-        entry["status"] = "done"
-        book(c, p, st, amount, entry, incomplete)
-        st = commit(c, p, st)
-        out({"ok": True, "project": a.name, "node": nk, "amount": amount, "project_cost": st["cost"],
-             "period_total": p["total"], "next": f"adopt {a.name} <槽位> --node {nk} --version N --review"})
+    set_jobs(entry, find_all(r, "jobId"))
+    if not a.no_wait:
+        nstatus, has_out = node_done(p, nk)
+        if not r.get("_rc") and (status in OK_STATES or (nstatus == "finished" and has_out)) and status not in BAD_STATES:
+            entry["status"] = "done"
+            fill_job(p, entry)
+            book(c, p, st, amount, entry, incomplete)
+            st = commit(c, p, st)
+            out({"ok": True, "project": a.name, "node": nk, "amount": amount, "project_cost": st["cost"],
+                 "period_total": p["total"], "jobId": entry.get("jobId"),
+                 "next": f"adopt {a.name} <槽位> --node {nk} --version N --review"})
     if status in BAD_STATES or (r.get("_rc") and err_code(r) not in ("LOCAL_TIMEOUT", "OUTCOME_UNKNOWN") and not task):
         entry["status"] = "failed"
         p["ledger"].append(entry)
         save_period(c, p)
-        out({"ok": False, "project": a.name, "node": nk, "status": status, "error": "运行失败（未记花费）",
+        out({"ok": False, "project": a.name, "node": nk, "status": status, "error": "运行失败（未记积分）",
              "errorMessage": first(r, "errorMessage"), "code": first(r, "code") or err_code(r)}, 1)
-    entry["status"] = "pending"        # 超时 / 结果未知 / 还在跑：超时不取消任务，最终会扣费
+    entry["status"] = "pending"        # 超时 / 结果未知 / 还在跑 / --no-wait 已受理：超时不取消任务，最终会扣费
     book(c, p, st, amount, entry, incomplete)
     st = commit(c, p, st)
+    if a.no_wait:
+        out({"ok": True, "pending": True, "dispatched": True, "project": a.name, "node": nk, "taskId": task,
+             "runRequestId": rid, "status": status or "ACCEPTED",
+             "next": f"其余节点照样 run --no-wait；都提交完后 wait {a.name}（等这个工程所有 pending 的运行），再逐条 adopt"})
     out({"ok": False, "pending": True, "project": a.name, "node": nk, "taskId": task, "runRequestId": rid,
          "status": status or err_code(r), "error": "还没跑完；用 wait 继续等，不要换 ID 重跑",
          "next": f"wait {a.name} --node {nk}"}, 4)
 
 
 def cmd_wait(a):
+    """等运行结果。带 --node 只等这一个；不带就等这个工程账本里所有 pending 的运行（配合 run --no-wait）。"""
     c = cfg()
     p = find_proj_period(c, a.name)
-    nk = a.node.split(":", 1)[-1]
+    if a.node:
+        nodes = [a.node.split(":", 1)[-1]]
+    else:
+        nodes = list(dict.fromkeys(e["node"] for e in p["ledger"] if e.get("project") == a.name
+                                   and e.get("status") == "pending" and e.get("node")))
+        if not nodes:
+            out({"ok": True, "project": a.name, "results": [], "message": "这个工程没有 pending 的运行"})
     deadline = time.time() + int(a.timeout)
-    status = None
-    while time.time() < deadline:
-        status, has_out = node_done(p, nk)
-        if status == "finished" and has_out:
+    res = {nk: {"node": nk, "status": None} for nk in nodes}
+    left = list(nodes)
+    while True:
+        ended = []
+        for nk in left:
+            status, has_out = node_done(p, nk)
+            res[nk]["status"] = status
+            if status == "finished" and has_out:
+                res[nk]["ok"] = True
+            elif status in ("failed", "error", "canceled", "cancelled"):
+                d = rh("node", "get", "id:" + nk, "-p", p["canvas_id"], "--include", "outputs", check=False)
+                res[nk].update(ok=False, errorMessage=first(d, "errorMessage"))
+            else:
+                continue
+            ended.append(nk)
+        if ended:
+            p = find_proj_period(c, a.name)          # 写回前重读账本，不覆盖别的命令刚记的账
             for e in p["ledger"]:
-                if e.get("node") == nk and e.get("status") == "pending":
-                    e["status"] = "done"
+                r_ = res.get(e.get("node"))
+                if e.get("node") in ended and e.get("status") == "pending":
+                    e["status"] = "done" if r_["ok"] else "failed_check_refund"
+                    fill_job(p, e)
+                    if e.get("jobId"):
+                        r_["jobId"] = e["jobId"]
             save_period(c, p)
-            out({"ok": True, "project": a.name, "node": nk, "status": status,
-                 "next": f"adopt {a.name} <槽位> --node {nk} --version N --review"})
-        if status in ("failed", "error", "canceled", "cancelled"):
-            for e in p["ledger"]:
-                if e.get("node") == nk and e.get("status") == "pending":
-                    e["status"] = "failed_check_refund"
-            save_period(c, p)
-            d = rh("node", "get", "id:" + nk, "-p", p["canvas_id"], "--include", "outputs", check=False)
-            out({"ok": False, "project": a.name, "node": nk, "status": status, "error": "运行失败",
-                 "errorMessage": first(d, "errorMessage")}, 1)
+            left = [nk for nk in left if nk not in ended]
+        if not left or time.time() >= deadline:
+            break
         time.sleep(15)
-    out({"ok": False, "pending": True, "project": a.name, "node": nk, "status": status, "error": "还没跑完，再 wait"}, 4)
+    rs = [res[nk] for nk in nodes]
+    body = {"project": a.name, "results": rs,
+            "done": [r["node"] for r in rs if r.get("ok") is True],
+            "failed": [r["node"] for r in rs if r.get("ok") is False],
+            "pending": [r["node"] for r in rs if "ok" not in r]}
+    if a.node:
+        body.update(node=nodes[0], status=rs[0]["status"], errorMessage=rs[0].get("errorMessage"))
+    if body["pending"]:
+        out({"ok": False, "pending": True, **body, "error": "还没跑完，再 wait"}, 4)
+    if body["failed"]:
+        out({"ok": False, **body, "error": "运行失败" + ("（其余已完成的照常 adopt）" if body["done"] else "")}, 1)
+    out({"ok": True, **body, "next": f"adopt {a.name} <槽位> --node {nodes[0]} --version N --review" if a.node
+         else f"逐条 adopt {a.name} <槽位> --node <节点> --version N --review"})          # 带 --node 时 next 和旧版一样
 
 
 def cmd_deliver(a):
-    """工程交付：成品只放本地 06_成品；更新画布名里的花费。"""
+    """工程交付：成品只放本地 06_成品；更新画布名里的积分。"""
     c = cfg()
     p = find_proj_period(c, a.name)
     st = load_proj(c, p, a.name)
@@ -1259,20 +1377,87 @@ def cmd_deliver(a):
         v["review"] = False
     pend = [e for e in p["ledger"] if e.get("project") == a.name and e.get("status") == "pending"]
     if pend:
-        warn(f"还有 {len(pend)} 笔运行没确认完成（花费已按报价计入）")
+        warn(f"还有 {len(pend)} 笔运行没确认完成（积分已按报价计入）")
     commit(c, p, st)
     sync_canvas_name(c, p)
     save_period(c, p)
     out({"ok": True, "project": a.name, "canvas": p["name"], "copied": copied, "local": out_dir})
 
 
+def entry_jobs(e):
+    j = e.get("jobId")
+    return [str(x) for x in (j if isinstance(j, list) else [j])] if j else []
+
+
+def entry_unsettled(e):
+    """这笔运行的积分还是按报价估的（报价 0 / 不完整），还没按账单核对。"""
+    if e.get("manual") or e.get("settled") or e.get("status") in ("failed", "dispatching"):
+        return False
+    if "incomplete" in e:
+        return bool(e["incomplete"])
+    return e.get("estimate_status") != "AVAILABLE" or not float(e.get("amount") or 0)   # 旧账本没记 incomplete
+
+
+def load_bill(path):
+    """读账单 json（POST /uc/point/consumeList 的返回，整份或其中的 data 都行），返回 {bizNo: 实扣积分}。"""
+    d = load_json(path)
+    if d is None:
+        fail(f"账单文件不存在：{path}")
+    if isinstance(d, dict) and isinstance(d.get("data"), (dict, list)):
+        d = d["data"]
+    recs = d.get("records") if isinstance(d, dict) else d
+    if not isinstance(recs, list):
+        fail("账单 json 里没有 records 列表（要 consumeList 接口的返回）", file=path)
+    bill = {}
+    for r in recs:
+        if isinstance(r, dict) and r.get("bizNo"):
+            k = str(r["bizNo"])
+            bill[k] = round(bill.get(k, 0) + float(r.get("pointUsedPoint") or 0), 3)
+    return bill
+
+
+def reconcile(p, bill, name=None):
+    """按账单的 bizNo 对账本里运行的 jobId：对上的把积分改成实扣。返回 (对上的, 对不上的, {工程: 差额})。"""
+    matched, unmatched, delta = [], [], {}
+    for e in p["ledger"]:
+        if e.get("manual") or e.get("settled") or e.get("status") in ("failed", "dispatching"):
+            continue
+        if name and e.get("project") != name:
+            continue
+        info = {"project": e.get("project"), "node": e.get("node"), "time": e.get("time"), "jobId": e.get("jobId")}
+        jobs = entry_jobs(e)
+        miss = [j for j in jobs if j not in bill]
+        if not jobs or miss:
+            unmatched.append({**info, "reason": "账本没记 jobId" if not jobs else f"账单里没有 bizNo {'、'.join(miss)}"})
+            continue
+        billed = round(sum(bill[j] for j in jobs), 3)
+        d = round(billed - float(e.get("amount") or 0), 3)
+        e.update(quoted=e.get("amount"), amount=billed, unit="积分", settled=True)
+        delta[e.get("project")] = round(delta.get(e.get("project"), 0) + d, 3)
+        matched.append({**info, "quoted": e["quoted"], "billed": billed})
+    return matched, unmatched, delta
+
+
 def cmd_cost(a):
     c = cfg()
     p = find_proj_period(c, a.name) if a.name else need_period(c)
+    rec = None
+    if a.reconcile:
+        matched, unmatched, delta = reconcile(p, load_bill(a.reconcile), a.name)
+        p["total"] = round(float(p.get("total", 0)) + sum(delta.values()), 3)
+        for name, d in delta.items():
+            st = load_proj(c, p, name)
+            st["cost"] = round(float(st.get("cost", 0)) + d, 3)
+            if not any(entry_unsettled(e) for e in p["ledger"] if e.get("project") == name):
+                st["incomplete"] = False       # 这个工程的运行都按账单核对过了：清掉「含未报价项」
+            commit(c, p, st)
+        if not any(entry_unsettled(e) for e in p["ledger"]):
+            p["incomplete"] = False            # 全部核对过：画布名去掉「+」
+        rec = {"matched": matched, "unmatched": unmatched, "delta": delta}
     if a.add is not None:
         st = load_proj(c, p, a.name) if a.name else None
         p["total"] = round(float(p.get("total", 0)) + a.add, 3)
-        p["ledger"].append({"time": now(), "project": a.name, "amount": a.add, "manual": True, "note": read_note(a)})
+        p["ledger"].append({"time": now(), "project": a.name, "amount": a.add, "unit": "积分", "manual": True, "note": read_note(a)})
         if a.settled:
             p["incomplete"] = False
         if st:
@@ -1280,10 +1465,14 @@ def cmd_cost(a):
             if a.settled:
                 st["incomplete"] = False
             commit(c, p, st)
-    if a.sync or a.add is not None:
+    if a.sync or a.add is not None or a.reconcile:
         sync_canvas_name(c, p)
         refresh_overview(c, p)
     save_period(c, p)
+    if rec is not None:
+        if rec["unmatched"]:
+            warn(f"{len(rec['unmatched'])} 笔运行没对上账单（见 unmatched），这几笔还是报价数")
+        out({"ok": True, "canvas": p["name"], "total": p["total"], "incomplete": bool(p.get("incomplete")), **rec})
     out({"ok": True, "canvas": p["name"], "total": p["total"], "ledger": p["ledger"][-10:]})
 
 
@@ -1405,6 +1594,47 @@ def cmd_report(a):
     out({"ok": True, "report": dst})
 
 
+def skill_version():
+    """本机 Skill 版本：读 SKILL.md 头部的 version（wb.py 的 VERSION 不一定跟着升）。"""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SKILL.md"), encoding="utf-8") as f:
+            m = re.search(r"^version:\s*([0-9][0-9.]*)", f.read(4000), re.M)
+        return m.group(1) if m else VERSION
+    except OSError:
+        return VERSION
+
+
+def ver_tuple(s):
+    return tuple(int(x) for x in re.findall(r"\d+", s or "")[:3])
+
+
+def fetch_upstream_version(timeout=10):
+    import urllib.request
+    with urllib.request.urlopen(UPSTREAM_VERSION_URL, timeout=timeout) as r:
+        txt = r.read(200).decode("utf-8", "replace")
+    m = re.search(r"\d+(?:\.\d+)+", txt)          # VERSION.txt 形如「0.5.0 (2026-11-11)」
+    return m.group(0) if m else None
+
+
+def cmd_version(a):
+    local = skill_version()
+    res = {"ok": True, "version": VERSION, "skill_version": local, "path": os.path.abspath(__file__)}
+    if a.check:
+        try:
+            up = fetch_upstream_version()
+        except Exception as e:
+            up, err = None, f"{type(e).__name__}: {e}"
+        else:
+            err = None if up else "VERSION.txt 里没有版本号"
+        if not up:     # 网络不通不算失败：说明查不到，照常干活
+            res.update(upstream=None, behind=None, message=f"查不到上游版本（{err}），先按本机 {local} 继续")
+        else:
+            behind = ver_tuple(up) > ver_tuple(local)
+            res.update(upstream=up, behind=behind,
+                       message=f"上游 {up}，本机 {local}，按 README 重跑 bootstrap 更新" if behind else f"本机 {local} 不落后于上游 {up}")
+    out(res)
+
+
 def cmd_rh(a):
     """透传 rhtvcli（不经 .cmd，长参数安全）。例：wb.py rh model search video --type video"""
     r = subprocess.run(rh_cmd() + a.args, env=rh_env())
@@ -1431,9 +1661,10 @@ def main():
     s.add_argument("--prompt-file", required=True); s.add_argument("--model"); s.add_argument("--mode")
     s.add_argument("--left", action="append", help="输入：槽位名（如 v1·人设图）或节点 ID，可多个")
     s.add_argument("--set", action="append", help="模型参数 KEY=VALUE（按 model schema）"); s.add_argument("--tag")
-    s = sp.add_parser("run", help="在画布上跑节点，成功后记花费"); s.add_argument("name"); s.add_argument("--node", required=True)
+    s = sp.add_parser("run", help="在画布上跑节点，成功后记积分"); s.add_argument("name"); s.add_argument("--node", required=True)
     s.add_argument("--timeout", default="1800")
-    s = sp.add_parser("wait", help="继续等 run 返回 pending 的节点"); s.add_argument("name"); s.add_argument("--node", required=True)
+    s.add_argument("--no-wait", action="store_true", help="报价、记账（pending）、派发后立刻返回，之后 wait <工程> 一次等完")
+    s = sp.add_parser("wait", help="继续等 pending 的运行（不带 --node 等这个工程所有 pending 的）"); s.add_argument("name"); s.add_argument("--node")
     s.add_argument("--timeout", default="1800")
     s = sp.add_parser("adopt", help="把画布上已生成的节点收进槽位并下载归档")
     s.add_argument("name"); s.add_argument("slot"); s.add_argument("--node", required=True)
@@ -1441,6 +1672,7 @@ def main():
     s.add_argument("--no-download", action="store_true")
     s = sp.add_parser("remove", help="删掉槽位或整个版本（如 v3）"); s.add_argument("name"); s.add_argument("targets", nargs="+")
     s.add_argument("--keep-local", action="store_true")
+    s.add_argument("--note", help="用户原话，写进 修改记录.md"); s.add_argument("--note-file")
     for nm, hp in (("approve", "设计师通过"), ("reject", "设计师打回")):
         s = sp.add_parser(nm, help=hp); s.add_argument("name"); s.add_argument("slots", nargs="*")
         s.add_argument("--version", type=int)
@@ -1448,11 +1680,12 @@ def main():
             s.add_argument("--note"); s.add_argument("--note-file")
     s = sp.add_parser("stage", help="更新进度"); s.add_argument("name"); s.add_argument("stage"); s.add_argument("state")
     s.add_argument("--note"); s.add_argument("--note-file")
-    s = sp.add_parser("deliver", help="工程交付：成品归档本地，更新画布名花费"); s.add_argument("name")
+    s = sp.add_parser("deliver", help="工程交付：成品归档本地，更新画布名积分"); s.add_argument("name")
     s.add_argument("--file", action="append"); s.add_argument("--force", action="store_true")
-    s = sp.add_parser("cost", help="查看/补记花费，同步画布名"); s.add_argument("--name"); s.add_argument("--add", type=float)
+    s = sp.add_parser("cost", help="查看/补记积分（--add 填积分数），同步画布名"); s.add_argument("--name"); s.add_argument("--add", type=float)
     s.add_argument("--note"); s.add_argument("--note-file"); s.add_argument("--sync", action="store_true")
-    s.add_argument("--settled", action="store_true", help="已到网站核对过实际花费")
+    s.add_argument("--settled", action="store_true", help="已到网站核对过实际消耗的积分")
+    s.add_argument("--reconcile", metavar="账单.json", help="按账单 bizNo 对账本 jobId，填实扣积分、更新画布名")
     s = sp.add_parser("layout", help="按标准格式重排画布（也会清理失效记录）"); s.add_argument("--period")
     s = sp.add_parser("preview", help="把排版画成 PNG 自查"); s.add_argument("--out"); s.add_argument("--period")
     s = sp.add_parser("rh", help="透传 rhtvcli"); s.add_argument("args", nargs=argparse.REMAINDER)
@@ -1460,12 +1693,10 @@ def main():
     s.add_argument("--problem"); s.add_argument("--fixed"); s.add_argument("--stage"); s.add_argument("--project")
     s.add_argument("--tail", type=int, default=30); s.add_argument("--all", action="store_true")
     s = sp.add_parser("report", help="把日志打包成 zip 发给维护者"); s.add_argument("--out")
-    sp.add_parser("version", help="显示版本")
+    s = sp.add_parser("version", help="显示版本"); s.add_argument("--check", action="store_true", help="和上游 GitHub 版本比，落后就提示更新")
     CTX["argv"] = sys.argv[1:]
     a = ap.parse_args()
     CTX["cmd"] = a.cmd
-    if a.cmd == "version":
-        out({"ok": True, "version": VERSION, "path": os.path.abspath(__file__)})
     try:
         globals()["cmd_" + a.cmd](a)
     except SystemExit:

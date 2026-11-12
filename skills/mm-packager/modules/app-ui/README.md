@@ -8,7 +8,7 @@
 | `swipe` 划卡到详情 | 首页角色卡横滑 3 张 → 停在本片角色 → 点开 → 卡片缩到左上角、详情页弹出（名字、标签、キャラ情報）→ 点「チャットに進む」 | `reference/产品录屏_划卡到详情.mp4`（JP 产品实录）。动效和 `ui` 默认文字都照它；改引擎或核对 UI 时先看这段 |
 | `chat` 聊天 | 本片角色的聊天页，消息逐条弹出（文字 / 图片 / 语音条 / 输入中），可模拟用户在输入框打字发送 | 没单独验收过，用前先出静帧给用户看（见 `rules/工程交付.md`） |
 
-本模块不含片尾。片尾用 `modules/jp-endcard`（JP）或自己做（做法见 `rules/通用.md`），接在这段后面。
+本模块不含片尾。JP 片尾默认用 `modules/endcard3`（三卡片尾板），用户点名才用 `modules/jp-endcard`；其他地区自己做（做法见 `rules/通用.md`），接在这段后面。
 
 ## 用法
 ```bash
@@ -96,4 +96,6 @@ python "$M" render --config "$P/包装素材_产品UI/swipe_版本1.json" --out 
 - 图片圆角用引擎里的 `masked(pathFn, drawFn)`（先画到单独一层，再用带平滑的 fill 做 destination-in），不用 `clip()`（canvas 的 clip 边缘不平滑，2 倍超采样也消不掉锯齿）〔2026-11-02〕
 - 「チャット」「チャットに進む」按钮是青 #74E8D0 → 蓝 #70B4FF → 淡紫 #BBA0FF 的渐变胶囊配深色字，改的时候不要偏离产品〔2026-11-02〕
 - 内部按 `ss` 倍绘制（默认 2）再缩小。
-- 字体、Logo、商店标复用 `$RES/jp-endcard/assets`；Chrome 路径读环境变量 `CHROME`，没设就用 `appui.py` 里的默认路径（见 `reference/环境.md`）。
+- 字体复用 `$RES/jp-endcard/assets`；Logo、商店标用 skill 内置的 `assets/官方素材/`（`badges.png` 是两个官方标同尺寸的合图）；Chrome 路径读环境变量 `CHROME`，没设就用 `appui.py` 里的默认路径（见 `reference/环境.md`）。
+
+读完校验口令：芦苇划桨54

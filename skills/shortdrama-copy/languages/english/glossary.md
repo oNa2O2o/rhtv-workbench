@@ -212,3 +212,7 @@
 | 开房 | open a room | get a room |
 | 局子 | bureau | police station |
 | 吃醋 | eat vinegar | jealous |
+
+---
+
+> 读完校验：茶烟系铃14

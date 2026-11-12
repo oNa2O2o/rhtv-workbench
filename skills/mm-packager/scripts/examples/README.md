@@ -1,6 +1,6 @@
 # scripts/examples：多版本出片示例
 
-来自 `cases/2026-11-05-JP-五音梗-毒舌講座-迭代/`（旧版案例，设计不作参考）。目前是唯一能直接对照的「gen.py → timeline.json → render.py」多版本写法，只学结构，参数按本片重写。目录和命名已按 `rules/工程交付.md` 改好。
+来自 `cases/2026-11-05-JP-五音梗-毒舌講座-迭代/`（旧版案例，设计不作参考）。只学「一个版本一键出片」的结构，参数按本片重写。目录和命名已按 `rules/工程交付.md` 改好。各版本时间怎么迁移不照这里，按 `rules/工程交付.md`「多版本」（版本配置.json + `scripts/mmkit/timewarp.py`），实例见 `cases/2026-11-12-JP-B-病娇女教师/gen.py`。
 
 ## 文件
 | 文件 | 作用 |
@@ -16,7 +16,7 @@
    P="$WORK_ROOT/<工程目录>" SK="$SK" ROLE=<角色名> bash "$P/脚本/batch.sh" 版本2 final   # 成品 成品/<工程名>_<角色名>.mp4
    ```
    复制到工程后脚本位置变了，`SK` 要显式传。
-3. `gen.py` 里用 `TM = {"版本1": {时间…}, "版本2": {…}}` 存各版本时间，按环境变量 `VER` 切换，图层写到 `$P/包装素材_版本N/`；`layers.json` 需要的字段：`tracks`、`layers[{file, ext, track, name, start, dur, ax, ay, k}]`、`shake`、`push0/end0/end1`、`sw0/swd`、`ch0/chd`、`ec0`、`vos`、`sfx`。原案例的 gen.py 仍是旧目录（`包装素材v1`、`VER=_2`），照抄时按上面改。
+3. `gen.py` 只按版本1 的规范时间写，不存各版本时间表；各版本差异放 `工程素材/抽帧_版本N/版本配置.json`，build() 最后用 `scripts/mmkit/timewarp.py` 映射到本版本（见 `rules/工程交付.md`「多版本」）；按环境变量 `VER` 切换，图层写到 `$P/包装素材_版本N/`。用本目录的 to_timeline.mjs 时，`layers.json` 需要的字段：`tracks`、`layers[{file, ext, track, name, start, dur, ax, ay, k}]`、`shake`、`push0/end0/end1`、`sw0/swd`、`ch0/chd`、`ec0`、`vos`、`sfx`。原案例的 gen.py 仍是旧目录（`包装素材v1`、`VER=_2`），照抄时按上面改。
 
 ## 复用前要改
 - BGM 闪避：`lvl()` 里固定的 .11/.28 和 0.06 s 淡变是该片旧写法。现行做法见 `rules/通用.md`（整句平滑压低，不写死音量），重写这一段。

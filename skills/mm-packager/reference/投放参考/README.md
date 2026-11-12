@@ -1,5 +1,11 @@
 # 投放参考（转化承接 / 片尾）
 
+## 样式索引（用户点名样式时先查这里，两个以上都对得上就按 rules/通用.md「沟通与改版」出候选静帧问一句）
+| 用户说法 | 参考 | 模块 |
+|---|---|---|
+| 三卡片尾板 | 本目录 `三卡片尾板_参考.webp`（用户 2026-11-12 给的参考图：顶部 Logo、三张角色卡扇形、中间本片角色金边高亮、金橙渐变下载按钮） | `modules/endcard3`（JP 默认片尾） |
+| 主卡长廊尾板（3D 卡片一镜到底，17.3 s） | — | `modules/jp-endcard`（用户点名才用） |
+
 ## 产品 UI：Figma 设计稿
 - 文件：Miraimind - 1.0-4.0版本
 - 链接：https://www.figma.com/design/5l7Y1FahFUy1IB1tS7WR2G/Miraimind---1.0-4.0%E7%89%88%E6%9C%AC?node-id=11459-43295&p=f&t=D3Y9BYqZq1ESUedY-0

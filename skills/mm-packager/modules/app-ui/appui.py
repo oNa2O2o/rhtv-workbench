@@ -13,7 +13,8 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 HERE = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
 ENGINE = f"{HERE}/engine"
 RES = (os.environ.get("MM_RES") or "Z:/创新事业部/AIGC项目视频组/mm-packager资源").replace("\\", "/")
-SHARED = f"{RES}/jp-endcard"                 # 复用 JP 尾板的字体 / Logo / 商店标 / 音效
+SHARED = f"{RES}/jp-endcard"                 # 复用 JP 尾板的字体 / 音效
+OFFICIAL = f"{os.path.dirname(os.path.dirname(HERE))}/assets/官方素材"   # 官方 Logo、商店标 skill 内置
 AUD = f"{SHARED}/media/audio"
 CHROME = os.environ.get("CHROME", r"C:/Program Files/Google/Chrome/Application/chrome.exe")   # 环境变量 CHROME 可覆盖，见 reference/环境.md
 FPS = 30
@@ -27,8 +28,8 @@ def prepare(user):
     cfg = json.loads(json.dumps(user)); files = {}
     A = f"{SHARED}/assets"
     shared = {"fonts/black.otf": f"{A}/fonts/NotoSansJP-Black.otf", "fonts/bold.otf": f"{A}/fonts/NotoSansJP-Bold.otf",
-              "fonts/medium.otf": f"{A}/fonts/NotoSansJP-Medium.otf", "a/logo_icon.png": f"{A}/logo_icon.png",
-              "a/logo_word.png": f"{A}/logo_word.png", "a/badges.png": f"{A}/badges.png"}
+              "fonts/medium.otf": f"{A}/fonts/NotoSansJP-Medium.otf", "a/logo_icon.png": f"{OFFICIAL}/logo_icon.png",
+              "a/logo_word.png": f"{OFFICIAL}/logo_word.png", "a/badges.png": f"{OFFICIAL}/badges.png"}
     files.update(shared)
     cfg["fonts"] = {"black": "fonts/black.otf", "bold": "fonts/bold.otf", "medium": "fonts/medium.otf"}
     cfg["assets"] = {"logoIcon": "a/logo_icon.png", "logoWord": "a/logo_word.png", "badges": "a/badges.png"}
@@ -63,24 +64,38 @@ def serve(cfg, files):
     return f"http://127.0.0.1:{srv.server_address[1]}/index.html"
 
 class Page:
+    """headless Chrome 里的引擎页。出错（包括 sys.exit）也要关掉 Chrome：调用方用 try/finally 调 close()。"""
     def __init__(self, user):
         from playwright.sync_api import sync_playwright
         self.cfg, files = prepare(user); url = serve(self.cfg, files)
-        self.pw = sync_playwright().start()
-        self.b = self.pw.chromium.launch(executable_path=CHROME if os.path.exists(CHROME) else None)
-        self.pg = self.b.new_page(viewport={"width": 540, "height": 960})
-        self.pg.goto(url); self.pg.wait_for_function("window.__ready || window.__err", timeout=120000)
-        err = self.pg.evaluate("window.__err")
-        if err: sys.exit("引擎初始化失败: " + err)
-        self.tl = self.pg.evaluate("window.timeline()")
+        self.pw = sync_playwright().start(); self.b = None
+        try:
+            self.b = self.pw.chromium.launch(executable_path=CHROME if os.path.exists(CHROME) else None)
+            self.pg = self.b.new_page(viewport={"width": 540, "height": 960})
+            self.pg.goto(url); self.pg.wait_for_function("window.__ready || window.__err", timeout=120000)
+            err = self.pg.evaluate("window.__err")
+            if err: sys.exit("引擎初始化失败: " + err)
+            self.tl = self.pg.evaluate("window.timeline()")
+        except BaseException:
+            self.close(); raise
     def frame(self, t): return base64.b64decode(self.pg.evaluate(f"window.grabFrame({t})").split(",", 1)[1])
-    def close(self): self.b.close(); self.pw.stop()
+    def close(self):
+        try:
+            if self.b: self.b.close()
+        except Exception: pass
+        try: self.pw.stop()
+        except Exception: pass
+        self.b = None
 
 def stills(user, out, times):
-    os.makedirs(out, exist_ok=True); P = Page(user); D = P.tl["duration"]
-    if not times: times = [round(D * k / 6, 2) for k in range(1, 6)] + [round(D - .1, 2)]
-    for t in times: open(f"{out}/t{t:05.2f}.png", "wb").write(P.frame(t))
-    P.close(); print(json.dumps({"stills": out, "times": times, **P.tl}, ensure_ascii=False))
+    os.makedirs(out, exist_ok=True); P = Page(user)
+    try:
+        D = P.tl["duration"]
+        if not times: times = [round(D * k / 6, 2) for k in range(1, 6)] + [round(D - .1, 2)]
+        for t in times: open(f"{out}/t{t:05.2f}.png", "wb").write(P.frame(t))
+    finally:
+        P.close()
+    print(json.dumps({"stills": out, "times": times, **P.tl}, ensure_ascii=False))
 
 # 默认音效：事件名 → (文件, 音量)。文件 None + swipe = 粉噪合成的轻划声（裁决 5 保留的现有默认值；正式片按 rules/通用.md 用 sfx.swipe 换成用户音效或 ElevenLabs 生成）；裸文件名在 $RES/jp-endcard/media/audio 里找。
 SFX = {"message": ("sfx_message_1.mp3", .32), "send": ("sfx_click_1.mp3", .35), "click": ("sfx_click_1.mp3", .7),
@@ -122,14 +137,18 @@ def sfx_filter(events, table, D):
 
 def render(user, out):
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True); sfx = sfx_table(user)   # 先检查音效文件，免得渲染完才报错
-    P = Page(user); D = P.tl["duration"]; n = int(round(D * FPS)); silent = out[:-4] + "_无声.mp4"
-    ff = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "image2pipe", "-framerate", str(FPS), "-c:v", "png", "-i", "-",
-                           "-vf", "scale=out_range=tv:out_color_matrix=bt709,format=yuv420p", "-c:v", "libx264", "-crf", "15", "-preset", "medium", silent], stdin=subprocess.PIPE)
-    t0 = time.time()
-    for i in range(n):
-        ff.stdin.write(P.frame(i / FPS))
-        if i % 60 == 0: print(f"frame {i}/{n} {time.time() - t0:.0f}s", flush=True)
-    ff.stdin.close(); ff.wait(); P.close()
+    P = Page(user)
+    try:
+        D = P.tl["duration"]; n = int(round(D * FPS)); silent = out[:-4] + "_无声.mp4"
+        ff = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "image2pipe", "-framerate", str(FPS), "-c:v", "png", "-i", "-",
+                               "-vf", "scale=out_range=tv:out_color_matrix=bt709,format=yuv420p", "-c:v", "libx264", "-crf", "15", "-preset", "medium", silent], stdin=subprocess.PIPE)
+        t0 = time.time()
+        for i in range(n):
+            ff.stdin.write(P.frame(i / FPS))
+            if i % 60 == 0: print(f"frame {i}/{n} {time.time() - t0:.0f}s", flush=True)
+        ff.stdin.close(); ff.wait()
+    finally:
+        P.close()                                   # 出错也关掉 headless Chrome（残留会占内存）
     # 音效
     extra_in, fl = sfx_filter(P.tl["events"], sfx, D)
     inputs = ["-i", silent, *extra_in]

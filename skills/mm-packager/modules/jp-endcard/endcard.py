@@ -18,6 +18,8 @@ HERE = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
 RES = (os.environ.get("MM_RES") or "Z:/创新事业部/AIGC项目视频组/mm-packager资源").replace("\\", "/")
 ENGINE, MEDIA = f"{HERE}/engine", f"{RES}/jp-endcard/media"
 ASSETS = f"{RES}/jp-endcard/assets"
+OFFICIAL = f"{os.path.dirname(os.path.dirname(HERE))}/assets/官方素材"   # 官方 Logo、商店标 skill 内置，优先用它
+OLD_BADGES_MD5 = "9cb8d11c933ef9e05cbf83139111ecdf"   # prebuilt/default.mp4 渲染时用的旧商店标（两个不一样大，非官方原图）
 DEFAULT = json.load(open(f"{HERE}/config.default.json", encoding="utf-8"))
 PREBUILT = f"{RES}/jp-endcard/prebuilt/default.mp4"
 CHROME = os.environ.get("CHROME", r"C:/Program Files/Google/Chrome/Application/chrome.exe")   # 环境变量 CHROME 可覆盖，见 reference/环境.md
@@ -68,7 +70,15 @@ def cfg_hash(cfg, files):
 
 def is_default(cfg, files):
     """画面和定稿一致（mix 不算）。"""
+    # 现在商店标换成 skill 内置的官方原版（两个同尺寸），旧 prebuilt 画面里还是旧标 → 不再当定稿复用，要逐帧重渲染
+    if hashlib.md5(open(asset_file("badges.png"), "rb").read()).hexdigest() != OLD_BADGES_MD5: return False
     return not files and json.dumps(visual(cfg), sort_keys=True) == json.dumps(visual(DEFAULT), sort_keys=True)
+
+
+def asset_file(name):
+    """assets/<name>：skill 内置官方素材优先，没有再用共享资源目录。"""
+    p = f"{OFFICIAL}/{name}"
+    return p if os.path.exists(p) else f"{ASSETS}/{name}"
 
 # ---------------- 渲染 ----------------
 def serve(cfg, files):
@@ -79,7 +89,7 @@ def serve(cfg, files):
             path = urllib.parse.unquote(self.path.split("?")[0]).lstrip("/")
             if path == "config.js":
                 self.send_response(200); self.send_header("Content-Type", "application/javascript; charset=utf-8"); self.send_header("Content-Length", str(len(js))); self.end_headers(); self.wfile.write(js); return
-            if path.startswith("assets/") and path not in files: files[path] = f"{ASSETS}/{path[7:]}"
+            if path.startswith("assets/") and path not in files: files[path] = asset_file(path[7:])
             if path in files:
                 b = open(files[path], "rb").read(); self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
             return super().do_GET()

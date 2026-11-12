@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>保健室 3D 运镜参考</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
+  #wrap { position: relative; height: 100vh; aspect-ratio: 9 / 16; margin: 0 auto; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #hud { position: absolute; left: 8px; top: 8px; color: #ffd84d; font: 14px/1.5 sans-serif; text-shadow: 0 0 3px #000; white-space: pre; pointer-events: none; }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px; background: rgba(0,0,0,.5); display: flex; gap: 6px; align-items: center; }
+  #bar input { flex: 1; }
+  body.clean #hud, body.clean #bar { display: none; }
+</style>
+</head>
+<body>
+<div id="wrap"><div id="hud"></div><div id="bar"><button id="play">暂停</button><input id="seek" type="range" min="0" max="27.9" step="0.01" value="0"><span id="tt" style="color:#fff;font:12px sans-serif">0.00s</span></div></div>
+<script src="three.min.js"></script>
+<script>
+// 模板（2.5prompt/assets/3d）：新工程复制本文件，只改场景几段和关键帧表，改法见同目录 README.md
+// 3D 只管镜头和空间运动：角色用三个大块（腿、躯干、头）表示位置、朝向和姿态，不表示外形
+const CLEAN = location.search.includes('clean');
+const VIEW_SIDE = location.search.includes('side'), VIEW_TOP = location.search.includes('top');  // 调试用：侧视 / 俯视
+if (CLEAN) document.body.classList.add('clean');
+const DUR = 27.9, W = 540, H = 960, D2R = Math.PI / 180;
+const wrap = document.getElementById('wrap');
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1); renderer.setSize(W, H, false); wrap.prepend(renderer.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0xdfe3e6);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f94, 0.85));
+const sun = new THREE.DirectionalLight(0xffffff, 0.6); sun.position.set(-2, 4, -1); scene.add(sun);
+const mat = c => new THREE.MeshLambertMaterial({ color: c });
+const box = (w, h, d, c, x, y, z, parent) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(c)); m.position.set(x, y, z); (parent || scene).add(m); return m; };
+
+// 房间
+box(8, 0.02, 8, 0xb4b9bd, 0, -0.01, -1);
+box(8, 3, 0.05, 0xe9ecee, 0, 1.5, -4.2);
+box(0.05, 3, 8, 0xe2e6e8, 2.8, 1.5, -1);
+box(0.05, 3, 8, 0xe2e6e8, -2.8, 1.5, -1);
+// 保健室推拉门：帘子外右前方墙上
+box(0.08, 2.0, 1.0, 0x8c959c, 2.75, 1.0, -3.0);
+box(0.1, 0.12, 0.06, 0x444a50, 2.7, 1.0, -2.6);
+// 药柜（帘子外正前方，空间参照）
+box(1.4, 1.8, 0.4, 0xc4c9cd, -0.6, 0.9, -3.9);
+
+// 病床：主视角坐在床的长边上，床在主视角身后
+box(2.0, 0.12, 0.95, 0xf4f4f4, 0, 0.5, 0.33);
+box(2.0, 0.42, 0.9, 0x8f969c, 0, 0.22, 0.33);
+
+// 帘子：离主视角一臂多远，空间小
+const CUR_Z = -1.2, RAIL_X = 1.2, SIDE = 0.85 - CUR_Z;
+box(2 * RAIL_X, 0.03, 0.03, 0x777777, 0, 2.2, CUR_Z);
+function curtainPanel(w) {
+  const g = new THREE.Group(); const n = Math.max(2, Math.round(w / 0.08));
+  for (let i = 0; i < n; i++) { const m = box(w / n + 0.01, 2.0, 0.02, i % 2 ? 0xf7f7f7 : 0xe6e6e6, -w / 2 + (i + 0.5) * w / n, 1.18, (i % 2) * 0.04, g); }
+  scene.add(g); return g;
+}
+const leftPanel = curtainPanel(1.0); leftPanel.position.set(-RAIL_X + 0.5, 0, CUR_Z);
+const sideL = curtainPanel(SIDE); sideL.rotation.y = Math.PI / 2; sideL.position.set(-RAIL_X, 0, CUR_Z + SIDE / 2);
+const sideR = curtainPanel(SIDE); sideR.rotation.y = Math.PI / 2; sideR.position.set(RAIL_X, 0, CUR_Z + SIDE / 2);
+const movPanel = curtainPanel(1.0);
+// 调试视角里标出主视角头部（红块，红色小块朝主视角正前方）
+const povMark = new THREE.Group(); box(0.2, 0.22, 0.2, 0xd03030, 0, 0, 0, povMark); box(0.08, 0.06, 0.12, 0xff6060, 0, 0, -0.14, povMark); povMark.visible = false; scene.add(povMark);
+
+// 角色：三个大块
+const GREY = 0x6d747b;
+const ch = new THREE.Group(); scene.add(ch);           // 位于髋部，整体朝向
+const legs = new THREE.Group(); ch.add(legs);           // 腿块，绕髋部前后转（坐、跪）
+box(0.34, 0.88, 0.24, 0x5f666c, 0, -0.44, 0, legs);
+const torso = new THREE.Group(); ch.add(torso);         // 躯干 + 头，可单独转向、前倾
+const upper = new THREE.Group(); torso.add(upper);
+box(0.4, 0.6, 0.24, GREY, 0, 0.3, 0, upper);
+const head = box(0.22, 0.26, 0.24, 0x80878e, 0, 0.76, 0, upper);
+// 正面标记：脸、胸口、脚尖用浅色块，一眼分清正反
+box(0.16, 0.12, 0.02, 0xf2d7b6, 0, 0.03, 0.125, head);
+box(0.16, 0.42, 0.02, 0xf5f5f5, 0, 0.3, 0.125, upper);
+box(0.3, 0.08, 0.14, 0xf5f5f5, 0, -0.84, 0.16, legs);
+
+// 关键帧：三次 Hermite 插值，速度连续不顿挫；相邻两段有一段静止或方向反转时该点速度为 0
+function track(keys) {
+  const T = keys.map(k => k[0]);
+  const V = keys.map(k => Array.isArray(k[1]) ? k[1] : [k[1]]);
+  const dim = V[0].length, n = keys.length, scalar = !Array.isArray(keys[0][1]);
+  const M = V.map((v, i) => v.map((_, j) => {
+    if (i === 0 || i === n - 1) return 0;
+    const d0 = (V[i][j] - V[i - 1][j]) / (T[i] - T[i - 1]), d1 = (V[i + 1][j] - V[i][j]) / (T[i + 1] - T[i]);
+    if (Math.abs(d0) < 1e-9 || Math.abs(d1) < 1e-9 || d0 * d1 < 0) return 0;
+    return (d0 + d1) / 2;
+  }));
+  return t => {
+    let r;
+    if (t <= T[0]) r = V[0]; else if (t >= T[n - 1]) r = V[n - 1];
+    else {
+      let i = 0; while (t > T[i + 1]) i++;
+      const h = T[i + 1] - T[i], s = (t - T[i]) / h, s2 = s * s, s3 = s2 * s;
+      const h00 = 2 * s3 - 3 * s2 + 1, h10 = s3 - 2 * s2 + s, h01 = -2 * s3 + 3 * s2, h11 = s3 - s2;
+      r = V[i].map((v, j) => h00 * v + h10 * h * M[i][j] + h01 * V[i + 1][j] + h11 * h * M[i + 1][j]);
+    }
+    return scalar ? r[0] : r;
+  };
+}
+const win = (t, a, b, r) => Math.min(1, Math.max(0, (t - a) / r), Math.max(0, (b - t) / r)) * (t > a && t < b ? 1 : 0);
+
+// 朝向一律走小角度：相邻关键帧自动换算到 ±180° 以内
+const shortest = keys => { let prev; return keys.map(([t, v]) => { if (prev !== undefined) { while (v - prev > 180) v -= 360; while (v - prev < -180) v += 360; } prev = v; return [t, v]; }); };
+// 角色髋部 [x, y, z]（按真人速度：走路约 1 m/s，起坐约 0.7–1 s）
+const hip = track([
+  [0, [0.35, 0.9, -1.05]], [1, [0.35, 0.9, -1.05]], [2.6, [0.05, 0.9, -0.92]],                         // 背对拉帘 → 边转身边上前
+  [6.8, [0.05, 0.9, -0.92]], [7.2, [0.02, 0.9, -0.86]], [8.3, [-0.62, 0.9, -0.15]], [9, [-0.62, 0.62, 0.02]],   // 走到左边坐下
+  [12.9, [-0.62, 0.62, 0.02]], [13.6, [-0.66, 0.9, -0.12]], [14.1, [-0.8, 0.9, -0.45]],                  // 站起来让到左前方
+  [16.7, [-0.8, 0.9, -0.45]], [18.3, [0.35, 0.9, -0.95]],                                                // 主视角拉帘看门时，她走到他右前方的帘缝前
+  [20.4, [0.35, 0.9, -0.95]], [22, [0.05, 0.9, -0.72]],                                                // 握着手腕往前逼
+  [22.9, [0.05, 0.9, -0.72]], [23.9, [0.2, 0.86, -0.85]], [DUR, [0.2, 0.86, -0.85]]]);                     // 脚踩地，在主视角右前方俯身逼近（跪床沿只写在提示词里）
+// 下半身朝向（度）：0/360 = 面朝主视角（+Z），180/540 = 背对主视角；数值连续写，转向方向写死，第一幕全程往同一个方向转
+const yaw = track([[0, 180], [1, 180], [2.6, 357], [7.3, 357], [8.0, 420], [9.0, 540], [12.9, 540], [14.1, 421], [16.7, 421], [17.2, 473], [18.1, 460], [18.4, 435], [19.1, 435], [20.1, 328], [20.5, 328], [22, 360], [22.9, 360], [23.9, 347], [DUR, 347]]);
+// 上半身朝向（世界角度）：坐下时下半身背对病床，上半身一直朝着主视角，走最短的方向
+const tW = track([[0, 180], [1, 180], [2.6, 357], [7.3, 357], [8.3, 436], [9.0, 450], [12.9, 450], [14.1, 421], [16.7, 421], [17.2, 473], [18.1, 460], [18.4, 435], [19.1, 435], [20.1, 328], [20.5, 328], [22, 360], [22.9, 360], [23.9, 347], [DUR, 347]]);
+const lean = track([[0, 0], [2.1, 0], [2.9, 55], [6.8, 55], [7.3, 0], [8.3, 0], [9, 10], [9.8, 28], [12.4, 32], [12.9, 32], [13.5, 0], [22.9, 0], [23.9, 60], [DUR, 60]]);
+// 腿块：0 = 竖直站立；-45 = 坐在床沿，腿往身前斜着落到地面
+const legPitch = track([[0, 0], [8.3, 0], [9, -45], [12.9, -45], [13.6, 0], [DUR, 0]]);
+const headTilt = track([[0, 0], [3.1, 0], [3.9, 12], [5.9, 12], [6.8, 0], [9.7, -8], [12.9, -8], [13.5, 0], [24.5, 0], [25.5, 10], [DUR, 10]]);
+// 可动帘子左边缘：-0.3 = 合上；0.95 = 拉开
+const curEdge = track([[0, 1.0], [0.15, 1.0], [0.9, -0.3], [16.5, -0.3], [17.2, 0.95], [18.4, 0.95], [19.1, -0.3], [DUR, -0.3]]);
+
+// 镜头（主视角头部）
+const camPos = track([[0, [0, 1.15, 0]], [14.5, [0, 1.15, 0]], [15.1, [0, 1.36, -0.13]], [15.7, [0, 1.62, -0.16]], [16.5, [0.1, 1.62, -0.55]], [20.5, [0.1, 1.62, -0.55]], [21.5, [0.03, 1.62, -0.2]], [22, [0, 1.6, -0.1]], [22.9, [0, 1.15, 0]], [23.4, [0, 1.15, 0.06]], [DUR, [0, 1.15, 0.06]]]);
+const camYaw = track([[0, 0], [7, 0], [9.2, 55], [12.9, 55], [14.1, 58], [14.5, 58], [15.6, 0], [16.6, 0], [17.3, -42], [18, -42], [18.7, -28], [19.9, -20], [21.5, 0], [DUR, 0]]);
+const camPitch = track([[0, 12], [2.1, 12], [2.9, 3], [6.8, 3], [9.2, 0], [12.9, 0], [13.9, 4], [14.7, 8], [15.7, -3], [19.1, -3], [20.1, -6], [22, -4], [22.9, 8], [23.9, 12], [DUR, 12]]);
+const camZoom = track([[0, 1], [19.8, 1], [20.2, 1.5], [20.5, 1.5], [21.1, 1], [26.2, 1], [27.4, 1.5], [DUR, 1.5]]);
+const BASE_VFOV = 100;
+const camera = new THREE.PerspectiveCamera(BASE_VFOV, W / H, 0.02, 50); camera.rotation.order = 'YXZ';
+
+const SEGS = [[0, 1, '背对主视角拉上帘子'], [1, 2.6, '边转身边上前一步'], [2.6, 2.9, '俯身，双手撑床（−30）'], [2.9, 6.8, '台词1 ねぇ、最後の検診が…'], [6.8, 9.0, '直起身，看着主视角绕到他左边坐下（同一方向转）'], [9.0, 12.4, '台词2 何震えてるの…（凑近耳边）'], [12.4, 12.9, '第一幕定格'],
+  [12.9, 14.5, '她站起来让到左前方，示意可以走（+35）'], [14.5, 15.7, '主视角站起来'], [15.7, 16.5, '主视角走到帘前'], [16.5, 17.3, '主视角拉开帘子，看向大门'], [17.3, 18.4, '钟声＋门锁（−49）；她走到右前方帘缝前'], [18.4, 19.1, '她把帘子拉上'],
+  [19.1, 19.9, '她转向主视角，握住手腕'], [19.9, 22.9, '台词3 冗談よ…（边说边把主视角逼回床边坐下）'], [22.9, 23.9, '右前方俯身逼近（单膝跪床沿）'], [23.9, 27.4, '台词4 ただ健康な…（钟声打断）'], [27.4, 27.9, '第二幕定格']];
+
+const STEP_HZ = 1.8;
+let prevHip = null, prevT = null;
+function setTime(t) {
+  const e = curEdge(t), w = RAIL_X - e;
+  movPanel.scale.set(w, 1, 1); movPanel.position.set(e + w / 2, 0, CUR_Z + 0.05);
+  const hp = hip(t);
+  // 角色走路时身体轻微起伏（按水平速度）
+  const dt = 0.05, hp2 = hip(t + dt);
+  const v = Math.hypot(hp2[0] - hp[0], hp2[2] - hp[2]) / dt;
+  const bobC = Math.min(1, v / 0.6) * 0.018 * Math.abs(Math.sin(Math.PI * STEP_HZ * t));
+  ch.position.set(hp[0], hp[1] - bobC, hp[2]); ch.rotation.y = yaw(t) * D2R;
+  legs.rotation.x = legPitch(t) * D2R;
+  torso.rotation.y = (tW(t) - yaw(t)) * D2R; upper.rotation.x = lean(t) * D2R;
+  head.rotation.z = headTilt(t) * D2R;
+  // 主视角走路的头部起伏和左右晃（只在走路段）
+  const wk = Math.max(win(t, 15.7, 16.5, 0.2), win(t, 20.5, 22.0, 0.25));
+  const ph = Math.PI * STEP_HZ * t;
+  const bobY = -wk * 0.022 * Math.abs(Math.sin(ph)), bobX = wk * 0.014 * Math.sin(ph), roll = wk * 0.8 * Math.sin(ph);
+  const sh = (a, f, p) => a * Math.sin(t * f + p);
+  const cp = camPos(t);
+  camera.position.set(cp[0] + bobX + sh(0.004, 1.7, 0), cp[1] + bobY + sh(0.004, 2.3, 2), cp[2]);
+  camera.rotation.y = (camYaw(t) + sh(0.5, 1.3, 0.5) + sh(0.2, 3.1, 2)) * D2R;
+  camera.rotation.x = (camPitch(t) + sh(0.45, 1.6, 1.2) + sh(0.15, 3.3, 0.2)) * D2R;
+  camera.rotation.z = (roll + sh(0.4, 1.1, 2.2)) * D2R;
+  camera.fov = 2 * Math.atan(Math.tan(BASE_VFOV * D2R / 2) / camZoom(t)) / D2R;
+  camera.updateProjectionMatrix();
+  if (VIEW_SIDE || VIEW_TOP) {
+    povMark.position.copy(camera.position); povMark.rotation.set(0, camera.rotation.y, 0); povMark.visible = true; sideL.visible = sideR.visible = false;
+    if (VIEW_SIDE) { camera.position.set(2.6, 1.3, -0.45); camera.rotation.set(-0.05, Math.PI / 2, 0); camera.fov = 50; }
+    else { camera.position.set(-0.1, 4.2, -0.45); camera.rotation.set(-Math.PI / 2, 0, 0); camera.fov = 32; }
+    camera.updateProjectionMatrix();
+  }
+  renderer.render(scene, camera);
+  if (!CLEAN) {
+    const s = SEGS.find(s => t >= s[0] && t < s[1]) || SEGS[SEGS.length - 1];
+    document.getElementById('hud').textContent = `${t.toFixed(2)}s  ${s[0]}-${s[1]}s\n${s[2]}\n变焦 ${camZoom(t).toFixed(2)}x  转头 ${camYaw(t).toFixed(0)}°  俯仰 ${camPitch(t).toFixed(0)}°`;
+  }
+}
+// 速度自检：返回各量在 t 时刻的值
+window.probe = t => ({ hip: hip(t), cam: camPos(t), camYaw: camYaw(t), yaw: yaw(t), tw: tW(t) });
+window.setTime = setTime; window.DUR = DUR;
+
+let playing = !CLEAN, t0 = performance.now(), cur = 0;
+const seek = document.getElementById('seek'), tt = document.getElementById('tt'), btn = document.getElementById('play');
+btn.onclick = () => { playing = !playing; btn.textContent = playing ? '暂停' : '播放'; t0 = performance.now() - cur * 1000; };
+seek.oninput = () => { cur = +seek.value; t0 = performance.now() - cur * 1000; tt.textContent = cur.toFixed(2) + 's'; setTime(cur); };
+function loop() {
+  if (playing) { cur = ((performance.now() - t0) / 1000) % DUR; seek.value = cur; tt.textContent = cur.toFixed(2) + 's'; setTime(cur); }
+  requestAnimationFrame(loop);
+}
+setTime(0); loop();
+</script>
+</body>
+</html>

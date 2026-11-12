@@ -1,6 +1,6 @@
-# jp-endcard · MM-JP 尾板（一镜到底 3D 卡片）
+# jp-endcard · MM-JP 主卡长廊尾板（一镜到底 3D 卡片）
 
-JP 通用尾板，17.3 s、1080×1920、30 fps，自带女王02 口播、钢琴弦乐 BGM 和音效。
+主卡长廊尾板（和 endcard3「三卡片尾板」不是一个东西），17.3 s、1080×1920、30 fps，自带女王02 口播、钢琴弦乐 BGM 和音效。
 什么时候用（定方案时问用户，选了才加）、不受片尾 ≤10 s 限制、换文案要重新申请，这些规则见 `rules/JP.md`；本文只写规格和用法。
 
 ## 内容（固定，改了要重新验收）
@@ -76,8 +76,8 @@ nohup $EC render --config "$P/包装素材_尾板/尾板配置.json" --out "$P/�
 |---|---|
 | `endcard.py` | 命令入口（render / stills）、配置合并、混音 |
 | `engine/endcard.js` + `index.html` | Canvas 3D 渲染引擎（定稿代码，2× 超采样 + 自适应运动模糊） |
-| `config.default.json` | 定稿配置：27 张内置卡、3 张主卡、配角顺序、口播分句时间、文案、混音参数 |
-| `$RES/jp-endcard/assets/` | 内置角色卡 c01–c27（来源未知）、字体、Logo、商店标识 |
+| `config.default.json` | 定稿配置：27 张内置卡、主卡长廊的主卡位（heroes）、配角顺序、口播分句时间、文案、混音参数 |
+| `$RES/jp-endcard/assets/` | 内置角色卡 c01–c27（来源未知）、字体；Logo、商店标改用 skill 内置的 `assets/官方素材/`（同名文件优先用它）。商店标换成两个同尺寸的官方原版后，`prebuilt/default.mp4` 里还是旧标，所以默认配置也会逐帧重渲染（约 30 分钟），渲染好可替换 prebuilt |
 | `$RES/jp-endcard/media/audio/`、`media/vo/` | BGM、收尾钢琴弦乐、音效、女王02 口播 |
 | `$RES/jp-endcard/prebuilt/default.mp4` | 定稿成片（默认配置直接复制） |
 
@@ -88,3 +88,5 @@ nohup $EC render --config "$P/包装素材_尾板/尾板配置.json" --out "$P/�
 - 第三张对比卡之后镜头速度连续，不停顿〔2026-10-27〕
 - 卡片吸入 Logo 的声音用 BGM 同源素材（收尾钢琴弦乐倒放），不用合成音效、竖琴、嗖声、咚〔2026-10-27〕
 - 左上角用 Logo 字标图，不手打 MIRAIMIND〔2026-10-27〕
+
+读完校验口令：石桥数星19

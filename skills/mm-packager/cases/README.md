@@ -5,6 +5,7 @@
 ## 参考案例
 | 案例 | 版式 | 看什么 | 脚本 |
 |---|---|---|---|
+| [2026-11-12-JP-B-病娇女教师](2026-11-12-JP-B-病娇女教师/README.md) | B | 多版本时间映射（版本配置.json + timewarp）、三卡片尾板 endcard3、用户音效优先 + ElevenLabs 补缺、BGM 断档续接 | gen.py、audio_gen.py、audio_gen2.py、prep_version.py、make_config.py、endcard3.py 原样存档，不能直接运行；已通用化成 scripts/mmkit/timewarp.py、prep.py、align_subs.py、modules/endcard3 |
 | [2026-11-05-JP-追放された女騎士](2026-11-05-JP-追放された女騎士/README.md) | B | 负向数值条、两首 BGM + 整句平滑闪避、划卡卡面取原始素材 | 本目录无脚本；原工程 mix_bgm.py 是整句平滑闪避的实现 |
 | [2026-11-05-JP-上の階のスポーツ女子](2026-11-05-JP-上の階のスポーツ女子/README.md) | B | 数值条出镜后才出现、多版本（ver_cfg + build_ver） | 本目录无脚本；原工程 patch.mjs 不能运行 |
 | [2026-11-02-JP-命令模式保镖](2026-11-02-JP-命令模式保镖/README.md) | B | 尺寸验收值、命令输入框、逐帧跟头 | 本目录无脚本；原工程 patch.mjs 不能运行 |

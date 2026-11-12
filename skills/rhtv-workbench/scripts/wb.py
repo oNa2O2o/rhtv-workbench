@@ -624,7 +624,7 @@ def title_text(st):
     if rejected:
         lines.append("打回待改：" + "、".join(rejected))
     lines += [f"版本：{len(vs)} 个" + (f"（{' / '.join(labels)}）" if labels else ""),
-              f"花费：{fmt_money(st.get('cost', 0))} 元" + ("（含未报价项）" if st.get("incomplete") else ""),
+              f"花费：{fmt_money(st.get('cost', 0))} 积分" + ("（含未报价项）" if st.get("incomplete") else ""),
               f"更新：{now()}"]
     if st.get("note"):
         lines += ["", "最近意见：" + st["note"]]
@@ -636,10 +636,10 @@ def refresh_title(c, p, st):
 
 
 def refresh_overview(c, p):
-    lines = [f"工程总览 · {p['key']}", f"设计师：{c['designer']}　花费合计：{fmt_money(p.get('total', 0))} 元", ""]
+    lines = [f"工程总览 · {p['key']}", f"设计师：{c['designer']}　花费合计：{fmt_money(p.get('total', 0))} 积分", ""]
     for name in p["rows"]:
         st = load_json(os.path.join(proj_dir(c, p, name), "工作台.json")) or {}
-        lines.append(f"{name}　{st.get('stage', '')} · {st.get('state', '')}　{fmt_money(st.get('cost', 0))} 元")
+        lines.append(f"{name}　{st.get('stage', '')} · {st.get('state', '')}　{fmt_money(st.get('cost', 0))} 积分")
     text = "\n".join(lines)
     h = text_h(text, LAYOUT["overview_w"])
     if p.get("overview"):
@@ -1176,10 +1176,15 @@ def cmd_run(a):
     sel = a.node if ":" in a.node else "id:" + a.node
     nk = sel.split(":", 1)[1]
     est = rh("node", "estimate", sel, "-p", p["canvas_id"], "--billing-scope", "personal", check=False)
-    amount = sum(float(t.get("amount") or 0) for t in est.get("totals", []) if t.get("currency", "CNY") == "CNY")
+    # 花费一律记 RH 积分：报价是 CNY，账单实测 0.1 元 = 10 积分（G2 低价版），按 1 元 = 100 积分换算
+    amount = round(100 * sum(float(t.get("amount") or 0) for t in est.get("totals", []) if t.get("currency", "CNY") == "CNY"))
     incomplete = est.get("status") != "AVAILABLE" or not est.get("totals") or         any(t.get("coverage") != "COMPLETE" for t in est.get("totals", []))
+    # 报价 0 / 用了免费额度 ≠ 没花钱：RH 现在按积分扣费，CLI 看不到实际扣分，一律标未核对
+    if amount == 0 or any(d.get("usedFreeLimit") for d in est.get("details", [])):
+        incomplete = True
     if incomplete:
-        warn(f"报价不完整（{est.get('status') or err_code(est)}），按 {amount} 元记；交付前到网站核对实际花费，用 cost --add 补记")
+        warn(f"报价不完整或为 0（{est.get('status') or err_code(est)}），先按 {amount} 积分记；实际积分扣减 CLI 看不到，"
+             f"交付前到 RH 网站积分明细核对，用 cost --add 补记。不要对用户说“花费 0”")
     rid = uuid7()
     entry = {"time": now(), "project": a.name, "node": nk, "amount": amount, "runRequestId": rid,
              "estimate": est.get("estimateId"), "estimate_status": est.get("status"), "status": "dispatching"}
